@@ -1,0 +1,126 @@
+# =============================================================================
+# FxBot .gitignore
+# =============================================================================
+
+# --- Environment & Secrets (CRITICAL - never commit) ---
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+secrets.yaml
+credentials.json
+
+# --- Database Files ---
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Log Files ---
+logs/
+*.log
+
+# --- Python Cache ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# --- Test Cache ---
+.pytest_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+nosetests.xml
+
+# --- Distribution / Build ---
+dist/
+build/
+*.egg-info/
+*.egg
+MANIFEST
+.eggs/
+wheels/
+
+# --- Virtual Environments ---
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.python-version
+
+# --- IDEs & Editors ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+.spyderproject.cfg
+.spyproject/
+.ropeproject/
+
+# --- macOS ---
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# --- Windows ---
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# --- Linux ---
+*~
+
+# --- Data Cache ---
+data/cache/
+data/tick/
+data/raw/
+
+# --- Backtest Results ---
+backtest/results/
+backtest/cache/
+backtest/reports/
+
+# --- Reports ---
+reports/
+*.html
+*.xlsx
+!templates/*.html
+
+# --- Jupyter Notebooks (checkpoints) ---
+.ipynb_checkpoints/
+*.ipynb
+
+# --- Type Checking ---
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# --- Profiling ---
+*.prof
+*.lprof
+
+# --- Temporary Files ---
+*.tmp
+*.temp
+*.bak
+*.orig
+
+# --- Config overrides with secrets ---
+config.local.yaml
+config.prod.yaml

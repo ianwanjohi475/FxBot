@@ -1,0 +1,560 @@
+# =============================================================================
+# FxBot Main Configuration File
+# =============================================================================
+# Sensitive credentials must be set as environment variables in .env
+# All placeholder values here are overridden by environment variables.
+
+# -----------------------------------------------------------------------------
+# Broker Settings
+# -----------------------------------------------------------------------------
+broker:
+  name: oanda
+  account_id: "${OANDA_ACCOUNT_ID}"
+  api_key: "${OANDA_API_KEY}"
+  environment: paper          # "paper" or "live"
+  base_url_practice: "https://api-fxpractice.oanda.com"
+  base_url_live: "https://api-fxtrade.oanda.com"
+  stream_url_practice: "https://stream-fxpractice.oanda.com"
+  stream_url_live: "https://stream-fxtrade.oanda.com"
+  max_retries: 5
+  retry_delay: 2              # seconds between retries
+  request_timeout: 30         # seconds
+
+# -----------------------------------------------------------------------------
+# MetaTrader 5 (fallback / secondary broker)
+# -----------------------------------------------------------------------------
+mt5:
+  login: "${MT5_LOGIN}"
+  password: "${MT5_PASSWORD}"
+  server: "${MT5_SERVER}"
+  timeout: 60000              # milliseconds
+  enabled: false
+
+# -----------------------------------------------------------------------------
+# Trading Pairs
+# -----------------------------------------------------------------------------
+pairs:
+  - EUR_USD
+  - GBP_USD
+  - USD_JPY
+  - AUD_USD
+  - USD_CHF
+  - NZD_USD
+  - USD_CAD
+  - XAU_USD
+  - GBP_JPY
+  - EUR_JPY
+
+# Pip sizes per pair (number of decimal places for pip calculation)
+pip_location:
+  EUR_USD: 4
+  GBP_USD: 4
+  USD_JPY: 2
+  AUD_USD: 4
+  USD_CHF: 4
+  NZD_USD: 4
+  USD_CAD: 4
+  XAU_USD: 2
+  GBP_JPY: 2
+  EUR_JPY: 2
+
+# Tick sizes per pair
+tick_size:
+  EUR_USD: 0.00001
+  GBP_USD: 0.00001
+  USD_JPY: 0.001
+  AUD_USD: 0.00001
+  USD_CHF: 0.00001
+  NZD_USD: 0.00001
+  USD_CAD: 0.00001
+  XAU_USD: 0.01
+  GBP_JPY: 0.001
+  EUR_JPY: 0.001
+
+# Minimum trade sizes (units)
+min_trade_units:
+  EUR_USD: 1000
+  GBP_USD: 1000
+  USD_JPY: 1000
+  AUD_USD: 1000
+  USD_CHF: 1000
+  NZD_USD: 1000
+  USD_CAD: 1000
+  XAU_USD: 1
+  GBP_JPY: 1000
+  EUR_JPY: 1000
+
+# -----------------------------------------------------------------------------
+# Timeframes
+# -----------------------------------------------------------------------------
+timeframes:
+  - M1
+  - M5
+  - M15
+  - M30
+  - H1
+  - H4
+  - D1
+  - W1
+
+# Primary analysis timeframe
+primary_timeframe: H1
+
+# Trend confirmation timeframe
+trend_timeframe: H4
+
+# Entry refinement timeframe
+entry_timeframe: M15
+
+# -----------------------------------------------------------------------------
+# Risk Management Settings
+# -----------------------------------------------------------------------------
+risk:
+  risk_per_trade: 0.01          # 1% of account balance per trade
+  max_open_trades: 5            # maximum simultaneous open positions
+  max_daily_loss: 0.05          # 5% max drawdown per day (closes all trades)
+  max_weekly_loss: 0.10         # 10% max drawdown per week
+  min_confluence_score: 65      # minimum score (0-100) to open a trade
+  max_correlated_trades: 2      # max trades in correlated pairs simultaneously
+  max_single_pair_trades: 1     # max trades on one pair at once
+  max_leverage: 30              # maximum leverage ratio
+  trailing_stop_activation: 1.5 # activate trailing stop after 1.5x ATR profit
+  trailing_stop_distance: 1.0   # trail by 1.0x ATR
+  breakeven_activation: 1.0     # move SL to breakeven after 1.0x ATR profit
+  partial_close_ratio: 0.5      # close 50% at first TP
+  use_atr_sl: true              # use ATR-based stop loss
+  atr_sl_multiplier: 1.5        # SL = 1.5 * ATR
+  atr_tp_multiplier: 3.0        # TP = 3.0 * ATR (2:1 RR minimum)
+  min_rr_ratio: 1.5             # minimum acceptable risk/reward ratio
+
+# Correlation pairs (avoid trading both simultaneously)
+correlated_pairs:
+  group_1: [EUR_USD, GBP_USD, AUD_USD, NZD_USD]
+  group_2: [USD_JPY, USD_CHF, USD_CAD]
+  group_3: [EUR_JPY, GBP_JPY]
+
+# -----------------------------------------------------------------------------
+# Strategy Weights
+# A weight of 1.0 means equal weighting; higher = more influence on score.
+# Set to 0.0 to disable a strategy without removing it.
+# -----------------------------------------------------------------------------
+strategy_weights:
+  trend_following:          1.0
+  mean_reversion:           1.0
+  breakout:                 1.0
+  momentum:                 1.0
+  scalping:                 1.0
+  swing_trading:            1.0
+  carry_trade:              1.0
+  news_trading:             1.0
+  pattern_recognition:      1.0
+  ichimoku:                 1.0
+  elliott_wave:             1.0
+  harmonic_pattern:         1.0
+  support_resistance:       1.0
+  fibonacci:                1.0
+  volume_spread_analysis:   1.0
+  grid_trading:             1.0
+  martingale_safe:          1.0
+  session_trading:          1.0
+  order_flow:               1.0
+  multi_timeframe:          1.0
+
+# Adaptive strategy weighting
+adaptive:
+  enabled: true
+  min_trades_to_evaluate: 20    # minimum trades before adjusting weights
+  min_win_rate_threshold: 0.40  # disable strategy if win rate below 40%
+  evaluation_window_days: 30    # look back 30 days for performance
+  max_weight: 3.0               # cap weight at 3x base
+  min_weight: 0.1               # floor weight at 0.1x base
+  weight_adjustment_rate: 0.1   # adjust weight by 10% per evaluation cycle
+
+# -----------------------------------------------------------------------------
+# Technical Indicator Parameters
+# -----------------------------------------------------------------------------
+indicators:
+  # Relative Strength Index
+  rsi:
+    period: 14
+    overbought: 70
+    oversold: 30
+    extreme_overbought: 80
+    extreme_oversold: 20
+
+  # Exponential Moving Averages
+  ema:
+    periods: [9, 21, 50, 200]
+
+  # Simple Moving Averages
+  sma:
+    periods: [20, 50, 200]
+
+  # MACD
+  macd:
+    fast: 12
+    slow: 26
+    signal: 9
+
+  # Average True Range
+  atr:
+    period: 14
+
+  # Bollinger Bands
+  bollinger_bands:
+    period: 20
+    std_dev: 2
+    squeeze_threshold: 0.1     # BB width below this = squeeze
+
+  # Stochastic Oscillator
+  stochastic:
+    fast:
+      k_period: 5
+      d_period: 3
+      slowing: 3
+    slow:
+      k_period: 14
+      d_period: 3
+      slowing: 3
+    overbought: 80
+    oversold: 20
+
+  # Ichimoku Cloud
+  ichimoku:
+    tenkan_period: 9
+    kijun_period: 26
+    senkou_b_period: 52
+    displacement: 26
+
+  # Williams %R
+  williams_r:
+    period: 14
+    overbought: -20
+    oversold: -80
+
+  # CCI - Commodity Channel Index
+  cci:
+    period: 20
+    overbought: 100
+    oversold: -100
+
+  # ADX - Average Directional Index
+  adx:
+    period: 14
+    trend_threshold: 25       # ADX > 25 = trending market
+
+  # Volume
+  volume:
+    ma_period: 20             # Volume moving average period
+
+  # Fibonacci retracement levels
+  fibonacci:
+    levels: [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0]
+    extension_levels: [1.272, 1.414, 1.618, 2.0, 2.618]
+
+  # Pivot points
+  pivot_points:
+    method: classic           # classic, fibonacci, woodie, camarilla, demark
+
+  # SuperTrend
+  supertrend:
+    period: 10
+    multiplier: 3.0
+
+  # Donchian Channel
+  donchian:
+    period: 20
+
+  # Keltner Channel
+  keltner:
+    ema_period: 20
+    atr_period: 10
+    multiplier: 2.0
+
+  # VWAP
+  vwap:
+    reset_period: D           # reset daily
+
+  # Momentum
+  momentum:
+    period: 10
+
+  # ROC - Rate of Change
+  roc:
+    period: 12
+
+  # MFI - Money Flow Index
+  mfi:
+    period: 14
+    overbought: 80
+    oversold: 20
+
+  # OBV - On Balance Volume
+  obv:
+    ma_period: 20
+
+# -----------------------------------------------------------------------------
+# Session Times (UTC)
+# -----------------------------------------------------------------------------
+sessions:
+  sydney:
+    open: "21:00"
+    close: "06:00"
+  tokyo:
+    open: "00:00"
+    close: "09:00"
+  london:
+    open: "07:00"
+    close: "16:00"
+  new_york:
+    open: "12:00"
+    close: "21:00"
+
+# Overlap sessions (highest volatility / best trading windows)
+session_overlaps:
+  tokyo_london:
+    start: "07:00"
+    end: "09:00"
+  london_new_york:
+    start: "12:00"
+    end: "16:00"
+
+# Original (broker local time references kept for backward compat)
+session_times_est:
+  london_open: "02:00"
+  london_close: "12:00"
+  ny_open: "07:00"
+  ny_close: "17:00"
+
+# Preferred trading sessions per pair
+pair_sessions:
+  EUR_USD: [london, new_york, london_new_york]
+  GBP_USD: [london, new_york, london_new_york]
+  USD_JPY: [tokyo, london, tokyo_london]
+  AUD_USD: [sydney, tokyo]
+  USD_CHF: [london, new_york]
+  NZD_USD: [sydney, tokyo]
+  USD_CAD: [new_york]
+  XAU_USD: [london, new_york, london_new_york]
+  GBP_JPY: [london, tokyo_london]
+  EUR_JPY: [london, tokyo_london]
+
+# Avoid trading during these UTC hours (low liquidity)
+low_liquidity_hours: ["21:00", "22:00", "23:00", "00:00"]
+
+# -----------------------------------------------------------------------------
+# News & Economic Calendar Settings
+# -----------------------------------------------------------------------------
+news:
+  enabled: true
+  api_key: "${NEWS_API_KEY}"
+  provider: forexfactory       # forexfactory, investing_com, newsapi
+  update_interval: 3600        # fetch news every 3600 seconds (1 hour)
+
+  # High-impact event pausing
+  pause_before_high_impact: 30     # minutes before high-impact news
+  resume_after: 15                 # minutes after high-impact news
+  pause_before_fomc_nfp_cpi: 60   # minutes before FOMC, NFP, CPI events
+
+  # Impact levels: low, medium, high
+  pause_on_impact: [high]          # pause only on high-impact events
+  allowed_impact_if_trending: [medium]  # allow medium during strong trends
+
+  # Specific events always causing pause (regardless of impact setting)
+  always_pause_events:
+    - "FOMC Statement"
+    - "Non-Farm Payrolls"
+    - "CPI"
+    - "ECB Interest Rate Decision"
+    - "BOE Interest Rate Decision"
+    - "BOJ Policy Rate"
+    - "RBA Cash Rate"
+    - "GDP"
+    - "US Unemployment Rate"
+
+  # Currencies to watch for news
+  watch_currencies: [USD, EUR, GBP, JPY, AUD, NZD, CAD, CHF]
+
+# -----------------------------------------------------------------------------
+# Telegram Notifications
+# -----------------------------------------------------------------------------
+telegram:
+  enabled: true
+  bot_token: "${TELEGRAM_BOT_TOKEN}"
+  chat_id: "${TELEGRAM_CHAT_ID}"
+  parse_mode: "HTML"
+
+  # Which events trigger Telegram messages
+  notify_on:
+    trade_open: true
+    trade_close: true
+    trade_modify: true
+    daily_summary: true
+    weekly_summary: true
+    drawdown_warning: true
+    error: true
+    heartbeat: false           # set true for periodic alive pings
+
+  # Throttle: max messages per minute to avoid Telegram rate limits
+  max_messages_per_minute: 20
+
+# -----------------------------------------------------------------------------
+# Email Notifications
+# -----------------------------------------------------------------------------
+email:
+  enabled: true
+  smtp_host: "${EMAIL_SMTP_HOST}"
+  smtp_port: 587
+  sender: "${EMAIL_SENDER}"
+  password: "${EMAIL_PASSWORD}"
+  recipient: "${EMAIL_RECIPIENT}"
+  use_tls: true
+
+  # Which events trigger email
+  notify_on:
+    trade_open: false          # too frequent for email
+    trade_close: true
+    daily_summary: true
+    weekly_summary: true
+    drawdown_warning: true
+    error: true
+    system_start: true
+    system_stop: true
+
+# -----------------------------------------------------------------------------
+# Database
+# -----------------------------------------------------------------------------
+database:
+  url: "${DATABASE_URL}"       # overridden by env var; default below
+  default_url: "sqlite:///forex_bot.db"
+  pool_size: 5
+  max_overflow: 10
+  echo: false                  # set true to log all SQL queries
+  connect_args:
+    check_same_thread: false   # required for SQLite with threading
+
+# -----------------------------------------------------------------------------
+# Backtesting Settings
+# -----------------------------------------------------------------------------
+backtesting:
+  start_date: "2015-01-01"
+  end_date: null               # null = today
+  initial_balance: 10000       # USD
+  account_currency: USD
+
+  # Spread simulation (pips)
+  spread_pips:
+    EUR_USD: 1.5
+    GBP_USD: 2.0
+    USD_JPY: 1.5
+    AUD_USD: 2.0
+    USD_CHF: 2.0
+    NZD_USD: 2.5
+    USD_CAD: 2.5
+    XAU_USD: 30.0
+    GBP_JPY: 3.0
+    EUR_JPY: 2.0
+
+  # Slippage simulation (pips)
+  slippage_pips: 0.5
+
+  # Commission (per lot, round turn, in account currency)
+  commission_per_lot: 7.0
+
+  # Data source for backtesting
+  data_source: oanda           # oanda, yfinance, csv
+
+  # Cache downloaded data locally
+  cache_data: true
+  cache_dir: "data/cache"
+
+  # Walk-forward optimization settings
+  walk_forward:
+    enabled: true
+    in_sample_ratio: 0.7       # 70% in-sample, 30% out-of-sample
+    windows: 5                 # number of walk-forward windows
+
+  # Monte Carlo simulation
+  monte_carlo:
+    enabled: true
+    simulations: 1000
+    confidence_level: 0.95
+
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
+logging:
+  level: "${LOG_LEVEL}"        # overridden by env var; default INFO
+  default_level: INFO
+  file: "logs/forex_bot.log"
+  max_bytes: 10485760          # 10 MB
+  backup_count: 5
+  format: "%(asctime)s | %(levelname)-8s | %(name)-25s | %(message)s"
+  date_format: "%Y-%m-%d %H:%M:%S"
+  console: true
+  colored: true
+
+# -----------------------------------------------------------------------------
+# Heartbeat / Health Check
+# -----------------------------------------------------------------------------
+heartbeat:
+  enabled: true
+  interval: 30                 # seconds between heartbeat checks
+  log_heartbeat: false         # suppress heartbeat from log (reduces noise)
+  telegram_heartbeat_interval: 3600  # send Telegram heartbeat every hour
+
+# -----------------------------------------------------------------------------
+# Paper Trading Mode
+# -----------------------------------------------------------------------------
+paper_trading: true            # overridden by PAPER_TRADING env var
+
+# Paper trading virtual account settings
+paper_account:
+  initial_balance: 10000       # USD
+  currency: USD
+  leverage: 30
+
+# -----------------------------------------------------------------------------
+# Dashboard (Streamlit)
+# -----------------------------------------------------------------------------
+dashboard:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8501
+  auto_refresh_seconds: 10
+  chart_candles: 200           # number of candles to display
+
+# -----------------------------------------------------------------------------
+# Data Collection
+# -----------------------------------------------------------------------------
+data:
+  # Historical data warm-up period (candles) per timeframe
+  warmup_candles:
+    M1: 500
+    M5: 500
+    M15: 300
+    M30: 300
+    H1: 200
+    H4: 200
+    D1: 500
+    W1: 200
+
+  # Maximum candles to request per API call
+  max_candles_per_request: 500
+
+  # Tick data collection
+  collect_ticks: false
+
+  # OANDA streaming
+  use_streaming: true
+
+# -----------------------------------------------------------------------------
+# Scheduler
+# -----------------------------------------------------------------------------
+scheduler:
+  timezone: UTC
+  jobs:
+    daily_summary: "17:30"     # UTC  (after NY close)
+    weekly_summary: "17:30"    # UTC on Friday
+    data_cleanup: "00:00"      # midnight UTC
+    equity_snapshot: "*/5"     # every 5 minutes (cron format)
