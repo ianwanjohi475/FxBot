@@ -211,12 +211,10 @@ def main():
 
     # Load config
     config_path = os.path.join(os.path.dirname(__file__), args.config)
-    config = ConfigLoader(config_path).config
+    config = ConfigLoader(config_path).all()
 
     # Override config paper_trading flag
-    if "paper_trading" not in config:
-        config["paper_trading"] = {}
-    config["paper_trading"]["enabled"] = paper_mode
+    config["paper_trading"] = paper_mode
 
     # Set up logging
     log_level = getattr(logging, args.log_level.upper(), logging.INFO)
@@ -250,31 +248,15 @@ def main():
         try:
             from core.engine import TradingEngine
 
-            engine = TradingEngine(config=config, paper_mode=paper_mode)
-            engine.initialize()
-
-            # Start Telegram listener (non-blocking)
-            try:
-                from alerts.telegram_bot import TelegramBot
-                bot = TelegramBot()
-
-                def _emergency_stop_callback():
-                    logger.critical("Emergency stop received via Telegram!")
-                    engine.emergency_stop()
-
-                bot.set_emergency_stop_callback(_emergency_stop_callback)
-                bot.start_listener()
-                logger.info("Telegram listener started.")
-            except Exception as exc:
-                logger.warning(f"Telegram listener not started: {exc}")
+            engine = TradingEngine(is_paper=paper_mode)
 
             # Set up scheduled tasks
             scheduler = setup_scheduler(engine, config, logger)
             scheduler.start()
             logger.info("Scheduler started (daily summary, weekly email, calendar refresh).")
 
-            # Block in the main loop
-            engine.run()
+            # Block in the main loop (connects broker, starts live feed, runs loop)
+            engine.start()
 
         except KeyboardInterrupt:
             logger.info("Shutdown requested by keyboard interrupt.")
