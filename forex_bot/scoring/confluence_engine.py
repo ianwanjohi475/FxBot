@@ -105,7 +105,9 @@ class ConfluenceEngine:
 
     def _score_sr_level(self, signal: TradeSignal, data: dict) -> float:
         """Check if entry is near a key S/R level."""
-        df = data.get(signal.timeframe) or data.get("H1")
+        df = data.get(signal.timeframe)
+        if df is None:
+            df = data.get("H1")
         if df is None or len(df) < 20:
             return 5.0
         try:
@@ -126,7 +128,9 @@ class ConfluenceEngine:
         return 0.0
 
     def _score_momentum(self, signal: TradeSignal, data: dict) -> float:
-        df = data.get(signal.timeframe) or data.get("H1")
+        df = data.get(signal.timeframe)
+        if df is None:
+            df = data.get("H1")
         if df is None or len(df) < 30:
             return 5.0
         try:
@@ -157,7 +161,9 @@ class ConfluenceEngine:
         return 0.0
 
     def _score_volume(self, signal: TradeSignal, data: dict) -> float:
-        df = data.get(signal.timeframe) or data.get("H1")
+        df = data.get(signal.timeframe)
+        if df is None:
+            df = data.get("H1")
         if df is None or len(df) < 25 or "volume" not in df.columns:
             return 3.0  # partial credit
         try:

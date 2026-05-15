@@ -133,6 +133,19 @@ def setup_logging(
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
+def setup_logger(
+    name: str,
+    level: Optional[str] = None,
+    log_file: Optional[str] = None,
+) -> logging.Logger:
+    """
+    Configure logging and return a named logger.
+    Alias for calling setup_logging() then get_logger(name).
+    """
+    setup_logging(level=level, log_file=log_file)
+    return logging.getLogger(name)
+
+
 def get_logger(name: str) -> logging.Logger:
     """
     Return a named logger.

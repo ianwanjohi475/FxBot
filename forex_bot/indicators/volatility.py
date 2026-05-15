@@ -56,8 +56,8 @@ class VolatilityIndicators:
         -------
         dict with 'upper', 'middle', 'lower', 'bandwidth', 'percent_b'
         """
-        middle = close.rolling(window=period).mean()
-        std = close.rolling(window=period).std(ddof=0)
+        middle = close.rolling(window=period, min_periods=1).mean()
+        std = close.rolling(window=period, min_periods=1).std(ddof=0)
 
         upper = middle + std_dev * std
         lower = middle - std_dev * std

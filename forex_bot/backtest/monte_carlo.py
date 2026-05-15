@@ -27,7 +27,7 @@ class MonteCarloSimulator:
         final_balances = []
         max_drawdowns = []
         ruin_count = 0
-        ruin_threshold = self.initial_balance * 0.5  # 50% loss = ruin
+        ruin_threshold = self.initial_balance * 0.8  # 20% loss = ruin
 
         all_equity_curves = []
         for _ in range(self.n):
@@ -41,7 +41,7 @@ class MonteCarloSimulator:
             dd = (peak - equity) / peak
             max_drawdowns.append(float(dd.max()))
 
-            if equity.min() < ruin_threshold:
+            if equity.min() <= ruin_threshold:
                 ruin_count += 1
 
             all_equity_curves.append(equity.tolist())

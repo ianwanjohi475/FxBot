@@ -131,7 +131,7 @@ class TrendIndicators:
         adx = wilder_smooth(dx.fillna(0), period)
 
         return {
-            "adx": adx,
+            "adx": adx.clip(0, 100),
             "plus_di": plus_di,
             "minus_di": minus_di,
         }
@@ -283,8 +283,8 @@ class TrendIndicators:
         supertrend = pd.Series(np.nan, index=df.index)
         direction = pd.Series(np.nan, index=df.index)
 
-        upper_arr = upper_band.values
-        lower_arr = lower_band.values
+        upper_arr = upper_band.values.copy()
+        lower_arr = lower_band.values.copy()
         close_arr = close.values
         st_arr = np.full(len(close), np.nan)
         dir_arr = np.full(len(close), np.nan)

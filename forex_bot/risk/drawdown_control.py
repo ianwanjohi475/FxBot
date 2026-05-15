@@ -90,7 +90,7 @@ class DrawdownController:
         return False
 
     def get_position_size_multiplier(self, current_balance: float) -> float:
-        if self.get_daily_drawdown_pct(current_balance) > 0.03:
+        if self.get_daily_drawdown_pct(current_balance) >= 0.03:
             return 0.5
         return 1.0
 

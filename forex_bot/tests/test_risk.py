@@ -65,7 +65,7 @@ class TestStopLossCalculator:
 
     def test_validate_sl_too_wide(self):
         sl = self.calc.validate_sl(1.1000, 1.0700, "BUY", max_pips=100)
-        assert abs(1.1000 - sl) <= 100 * 0.0001
+        assert round(abs(1.1000 - sl) / 0.0001, 2) <= 100.0
 
 
 class TestTakeProfitCalculator:
