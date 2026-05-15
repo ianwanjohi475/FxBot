@@ -217,8 +217,7 @@ def main():
     config["paper_trading"] = paper_mode
 
     # Set up logging
-    log_level = getattr(logging, args.log_level.upper(), logging.INFO)
-    logger = setup_logger("fxbot", level=log_level)
+    logger = setup_logger("fxbot", level=args.log_level.upper())
 
     mode_str = "PAPER TRADING" if paper_mode else "⚠️  LIVE TRADING"
     logger.info(f"FxBot starting — mode: {mode_str}")
