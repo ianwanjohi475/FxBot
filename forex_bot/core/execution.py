@@ -5,9 +5,9 @@ Handles paper trading mode and live mode.
 import uuid
 from datetime import datetime
 import pytz
-from typing import Optional
+from typing import Optional, Union
 from strategies import TradeSignal
-from .broker import OANDABroker
+from .broker import OANDABroker, MT5Broker
 from database.db import DatabaseManager
 from utils.logger import get_logger
 from utils.helpers import price_to_pips
@@ -18,7 +18,7 @@ LOT_TO_UNITS = 100_000
 
 
 class ExecutionEngine:
-    def __init__(self, broker: OANDABroker, db: DatabaseManager, is_paper: bool = True):
+    def __init__(self, broker: Union[OANDABroker, MT5Broker], db: DatabaseManager, is_paper: bool = True):
         self.broker = broker
         self.db = db
         self.is_paper = is_paper

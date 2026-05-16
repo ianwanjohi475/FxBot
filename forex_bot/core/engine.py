@@ -9,11 +9,12 @@ from datetime import datetime
 import pytz
 from typing import Optional
 
-from .broker import OANDABroker
+import os
+from .broker import OANDABroker, MT5Broker
 from .execution import ExecutionEngine
 from .session import SessionDetector
 from .heartbeat import HeartbeatMonitor
-from data.live_feed import LiveFeed
+from data.live_feed import LiveFeed, MT5LiveFeed
 from data.historical import HistoricalData
 from data.data_cleaner import DataCleaner
 from strategies.strategy_manager import StrategyManager
@@ -51,11 +52,18 @@ class TradingEngine:
         self.is_running = False
         self._shutdown_event = threading.Event()
 
-        # Core components
-        self.broker = OANDABroker()
+        # Core components — auto-detect broker from env vars
+        _use_mt5 = bool(os.getenv("MT5_LOGIN") and os.getenv("MT5_SERVER"))
+        if _use_mt5:
+            self.broker = MT5Broker()
+            self.live_feed = MT5LiveFeed()
+            logger.info("[Engine] Broker: MetaTrader 5")
+        else:
+            self.broker = OANDABroker()
+            self.live_feed = LiveFeed()
+            logger.info("[Engine] Broker: OANDA")
         self.db = DatabaseManager()
         self.execution: Optional[ExecutionEngine] = None
-        self.live_feed = LiveFeed()
         self.historical = HistoricalData()
 
         # Strategy & scoring

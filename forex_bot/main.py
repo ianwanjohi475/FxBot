@@ -224,16 +224,20 @@ def main():
     mode_str = "PAPER TRADING" if paper_mode else "⚠️  LIVE TRADING"
     logger.info(f"FxBot starting — mode: {mode_str}")
 
-    # Fail fast with a clear message if OANDA credentials are missing
-    missing = [v for v in ("OANDA_ACCOUNT_ID", "OANDA_API_KEY") if not os.getenv(v)]
-    if missing:
+    # Fail fast if neither OANDA nor MT5 credentials are present
+    has_oanda = os.getenv("OANDA_ACCOUNT_ID") and os.getenv("OANDA_API_KEY")
+    has_mt5 = os.getenv("MT5_LOGIN") and os.getenv("MT5_SERVER")
+    if not has_oanda and not has_mt5:
+        env_file = os.path.join(os.path.dirname(__file__), ".env")
         logger.error(
-            f"Missing required env var(s): {', '.join(missing)}\n"
-            f"  Fix: open  {os.path.join(os.path.dirname(__file__), '.env')}\n"
-            "  and set:\n"
+            f"No broker credentials found. Open {env_file} and set either:\n"
+            "  OANDA (practice account at oanda.com):\n"
             "    OANDA_ACCOUNT_ID=101-001-39322460-002\n"
-            "    OANDA_API_KEY=<your OANDA API token>\n"
-            "  Then save the file and re-run."
+            "    OANDA_API_KEY=<your token>\n"
+            "  OR MetaTrader 5 (any MT5 broker demo account):\n"
+            "    MT5_LOGIN=<account number>\n"
+            "    MT5_PASSWORD=<password>\n"
+            "    MT5_SERVER=<broker server, e.g. Exness-MT5Trial>"
         )
         sys.exit(1)
 
