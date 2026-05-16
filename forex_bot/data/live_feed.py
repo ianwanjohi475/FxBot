@@ -145,12 +145,13 @@ class MT5LiveFeed:
         "EUR_USD": "EURUSD", "GBP_USD": "GBPUSD", "USD_JPY": "USDJPY",
         "AUD_USD": "AUDUSD", "USD_CHF": "USDCHF", "NZD_USD": "NZDUSD",
         "USD_CAD": "USDCAD", "XAU_USD": "XAUUSD", "GBP_JPY": "GBPJPY",
-        "EUR_JPY": "EURJPY",
+        "EUR_JPY": "EURJPY", "US30_USD": "US30",
     }
     POLL_INTERVAL = 1.0  # seconds between price polls
 
     def __init__(self, pairs: List[str] = None):
-        self._pairs = pairs or list(self.OANDA_TO_MT5.keys())
+        # Default to only the 4 active trading pairs for MT5 feed
+        self._pairs = pairs or ["EUR_USD", "USD_JPY", "XAU_USD", "US30_USD"]
         self.prices: Dict[str, dict] = {}
         self.callbacks: List[Callable] = []
         self.is_running = False

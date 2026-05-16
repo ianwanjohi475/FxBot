@@ -129,7 +129,7 @@ class MT5Broker:
         "EUR_USD": "EURUSD", "GBP_USD": "GBPUSD", "USD_JPY": "USDJPY",
         "AUD_USD": "AUDUSD", "USD_CHF": "USDCHF", "NZD_USD": "NZDUSD",
         "USD_CAD": "USDCAD", "XAU_USD": "XAUUSD", "GBP_JPY": "GBPJPY",
-        "EUR_JPY": "EURJPY",
+        "EUR_JPY": "EURJPY", "US30_USD": "US30",
     }
 
     def __init__(self):

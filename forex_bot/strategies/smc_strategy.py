@@ -108,12 +108,16 @@ class SMCStrategy:
         kz_bonus = kill_zone.get("active", False)
 
         if direction == "BUY":
-            sl = structure["low"] - current_atr * 0.5
+            # OB uses "low", FVG uses "bottom" — handle both
+            sl_base = structure.get("low") or structure.get("bottom") or (current_price - current_atr)
+            sl = sl_base - current_atr * 0.5
             tp1 = current_price + current_atr * 1.5
             tp2 = current_price + current_atr * 3.0
             tp3 = current_price + current_atr * 5.0
         else:
-            sl = structure["high"] + current_atr * 0.5
+            # OB uses "high", FVG uses "top" — handle both
+            sl_base = structure.get("high") or structure.get("top") or (current_price + current_atr)
+            sl = sl_base + current_atr * 0.5
             tp1 = current_price - current_atr * 1.5
             tp2 = current_price - current_atr * 3.0
             tp3 = current_price - current_atr * 5.0

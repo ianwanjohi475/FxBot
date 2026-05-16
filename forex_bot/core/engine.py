@@ -34,14 +34,11 @@ from utils.config_loader import config
 
 logger = get_logger(__name__)
 
-PAIRS = [
-    "EUR_USD", "GBP_USD", "USD_JPY", "AUD_USD", "USD_CHF",
-    "NZD_USD", "USD_CAD", "XAU_USD", "GBP_JPY", "EUR_JPY",
-]
-TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"]
+PAIRS = ["EUR_USD", "USD_JPY", "XAU_USD", "US30_USD"]
+TIMEFRAMES = ["M15", "H1", "H4", "D1"]
 CANDLE_COUNT = 300
 SCAN_INTERVAL = 60  # seconds between full analysis cycles
-MAX_OPEN_TRADES = 5
+MAX_OPEN_TRADES = 3
 MAX_SPREAD_PIPS = 3.0  # 3x normal average
 DANGER_WIDE_SPREAD_MULT = 3.0
 
@@ -164,10 +161,12 @@ class TradingEngine:
             logger.debug(f"[Engine] {pair} blocked: {reason}")
             return
 
-        # Open trades limit
+        # Open trades limit + no duplicate on same pair
         open_trades = self.db.get_open_trades()
         if len(open_trades) >= MAX_OPEN_TRADES:
             return
+        if any(t.pair == pair for t in open_trades):
+            return  # already in a trade on this pair
 
         # Drawdown pause
         balance = self._account.get("balance", 10000)

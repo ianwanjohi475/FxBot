@@ -15,13 +15,14 @@ OANDA_TO_YFINANCE: Dict[str, str] = {
     "AUD_USD": "AUDUSD=X", "USD_CHF": "USDCHF=X", "NZD_USD": "NZDUSD=X",
     "USD_CAD": "USDCAD=X", "XAU_USD": "GC=F",
     "GBP_JPY": "GBPJPY=X", "EUR_JPY": "EURJPY=X",
+    "US30_USD": "^DJI",
 }
 
 OANDA_TO_MT5: Dict[str, str] = {
     "EUR_USD": "EURUSD", "GBP_USD": "GBPUSD", "USD_JPY": "USDJPY",
     "AUD_USD": "AUDUSD", "USD_CHF": "USDCHF", "NZD_USD": "NZDUSD",
     "USD_CAD": "USDCAD", "XAU_USD": "XAUUSD", "GBP_JPY": "GBPJPY",
-    "EUR_JPY": "EURJPY",
+    "EUR_JPY": "EURJPY", "US30_USD": "US30",
 }
 
 # yfinance periods that actually work within API limits
