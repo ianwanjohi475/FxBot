@@ -18,8 +18,10 @@ from dotenv import load_dotenv
 # ---------------------------------------------------------------------------
 # Bootstrap: load .env, ensure the package root is on sys.path
 # ---------------------------------------------------------------------------
-load_dotenv()
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(_HERE, ".env"), override=False)
+load_dotenv(os.path.join(os.path.dirname(_HERE), ".env"), override=False)
+sys.path.insert(0, _HERE)
 
 from utils.config_loader import ConfigLoader
 from utils.logger import setup_logger
@@ -221,6 +223,19 @@ def main():
 
     mode_str = "PAPER TRADING" if paper_mode else "⚠️  LIVE TRADING"
     logger.info(f"FxBot starting — mode: {mode_str}")
+
+    # Fail fast with a clear message if OANDA credentials are missing
+    missing = [v for v in ("OANDA_ACCOUNT_ID", "OANDA_API_KEY") if not os.getenv(v)]
+    if missing:
+        logger.error(
+            f"Missing required env var(s): {', '.join(missing)}\n"
+            f"  Fix: open  {os.path.join(os.path.dirname(__file__), '.env')}\n"
+            "  and set:\n"
+            "    OANDA_ACCOUNT_ID=101-001-39322460-002\n"
+            "    OANDA_API_KEY=<your OANDA API token>\n"
+            "  Then save the file and re-run."
+        )
+        sys.exit(1)
 
     # Override pairs if provided on CLI
     if args.pairs:

@@ -109,7 +109,10 @@ class HistoricalData:
             if data.empty:
                 return pd.DataFrame()
 
-            data.columns = [c.lower() for c in data.columns]
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = [c[0].lower() for c in data.columns]
+            else:
+                data.columns = [c.lower() for c in data.columns]
             data.index.name = "time"
             for col in ["open", "high", "low", "close"]:
                 if col not in data.columns and "adj close" in data.columns:
@@ -145,7 +148,10 @@ class HistoricalData:
                 auto_adjust=True,
                 progress=False,
             )
-            data.columns = [c.lower() for c in data.columns]
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = [c[0].lower() for c in data.columns]
+            else:
+                data.columns = [c.lower() for c in data.columns]
             if "volume" not in data.columns:
                 data["volume"] = 0.0
             return data[["open", "high", "low", "close", "volume"]]

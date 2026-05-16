@@ -168,8 +168,10 @@ class ConfigLoader:
             candidates.append(Path(self._config_path).parent / ".env")
         # CWD
         candidates.append(Path.cwd() / ".env")
-        # Repo root (two levels up from this file)
+        # forex_bot/ package directory
         candidates.append(Path(__file__).parent.parent / ".env")
+        # Project root one level above forex_bot/
+        candidates.append(Path(__file__).parent.parent.parent / ".env")
 
         for candidate in candidates:
             if candidate.is_file():
