@@ -207,6 +207,7 @@ class TradingEngine:
 
         for signal in signals:
             score = self.confluence.score_signal(signal, data, context)
+            self._write_chart_signal(signal, score)  # visualise in MT5 chart EA
             if not self.confluence.is_tradeable(score):
                 continue
 
@@ -341,6 +342,35 @@ class TradingEngine:
     def _on_price_tick(self, pair: str, price_data: dict):
         """Called on every price tick from live feed."""
         pass  # Heavy logic is in _main_loop scan; ticks are buffered in live_feed.prices
+
+    def _write_chart_signal(self, signal, score: float) -> None:
+        """Write signal to MT5 Files folder so the FxBotSignals EA can draw it."""
+        try:
+            import MetaTrader5 as mt5
+            info = mt5.terminal_info()
+            if info is None:
+                return
+            signals_path = os.path.join(info.data_path, "MQL5", "Files", "fxbot_signals.csv")
+
+            # Load existing lines (keep last 100 signals)
+            existing: list = []
+            if os.path.exists(signals_path):
+                with open(signals_path, "r", encoding="utf-8") as fh:
+                    existing = fh.readlines()[1:101]  # skip header, keep 100
+
+            ts = datetime.now(tz=pytz.utc).strftime("%Y.%m.%d %H:%M:%S")
+            new_line = (
+                f"{signal.pair},{signal.direction},"
+                f"{signal.entry_price:.5f},{signal.sl_price:.5f},"
+                f"{signal.tp1_price:.5f},{signal.tp2_price:.5f},{signal.tp3_price:.5f},"
+                f"{signal.strategy_name},{score:.1f},{ts}\n"
+            )
+            with open(signals_path, "w", encoding="utf-8") as fh:
+                fh.write("pair,direction,entry,sl,tp1,tp2,tp3,strategy,score,timestamp\n")
+                fh.write(new_line)
+                fh.writelines(existing)
+        except Exception:
+            pass  # silently skip if MT5 not available
 
     def _on_heartbeat_failure(self):
         logger.error("[Engine] Heartbeat failure detected!")
