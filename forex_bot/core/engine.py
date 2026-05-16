@@ -38,6 +38,7 @@ PAIRS = ["EUR_USD", "USD_JPY", "XAU_USD", "US30_USD"]
 TIMEFRAMES = ["M15", "H1", "H4", "D1"]
 CANDLE_COUNT = 300
 SCAN_INTERVAL = 60  # seconds between full analysis cycles
+NEWS_WRITE_INTERVAL = 1800  # seconds between news CSV refreshes (30 min)
 MAX_OPEN_TRADES = 3
 MAX_SPREAD_PIPS = 3.0  # 3x normal average
 DANGER_WIDE_SPREAD_MULT = 3.0
@@ -94,6 +95,7 @@ class TradingEngine:
         # Data cache: pair → timeframe → DataFrame
         self._data_cache: dict = {p: {} for p in PAIRS}
         self._account: dict = {}
+        self._last_news_write: float = 0.0
 
     def start(self):
         logger.info(f"[Engine] Starting FxBot (paper={self.is_paper})")
@@ -131,6 +133,12 @@ class TradingEngine:
 
                 # Periodic adaptive weight update
                 self.adaptive.update_weights()
+
+                # Write ForexFactory news to MT5 chart file every 30 min
+                now_ts = time.time()
+                if now_ts - self._last_news_write >= NEWS_WRITE_INTERVAL:
+                    self._write_news_events()
+                    self._last_news_write = now_ts
 
             except Exception as e:
                 logger.error(f"[Engine] Main loop error: {e}", exc_info=True)
@@ -370,6 +378,39 @@ class TradingEngine:
                 fh.writelines(existing)
         except Exception:
             pass  # silently skip if MT5 not available
+
+    def _write_news_events(self) -> None:
+        """Write upcoming ForexFactory events to MT5 Files folder for the EA."""
+        try:
+            import MetaTrader5 as mt5
+            info = mt5.terminal_info()
+            if info is None:
+                return
+            news_path = os.path.join(info.data_path, "MQL5", "Files", "fxbot_news.csv")
+
+            if self.news_filter._should_refresh():
+                self.news_filter.refresh_calendar()
+
+            events = self.news_filter.upcoming
+            est = pytz.timezone("America/New_York")
+
+            with open(news_path, "w", encoding="utf-8") as fh:
+                fh.write("currency,impact,event,scheduled_time\n")
+                for ev in events:
+                    ev_time = ev.get("time")
+                    if ev_time is None:
+                        continue
+                    if hasattr(ev_time, "tzinfo") and ev_time.tzinfo is None:
+                        ev_time = est.localize(ev_time)
+                    ts_str = ev_time.strftime("%Y.%m.%d %H:%M:%S")
+                    currency = str(ev.get("currency", "")).replace(",", "")
+                    impact = str(ev.get("impact", "LOW"))
+                    name = str(ev.get("event", "")).replace(",", " ")
+                    fh.write(f"{currency},{impact},{name},{ts_str}\n")
+
+            logger.info(f"[Engine] Wrote {len(events)} news events to MT5 chart")
+        except Exception as e:
+            logger.debug(f"[Engine] News write skipped: {e}")
 
     def _on_heartbeat_failure(self):
         logger.error("[Engine] Heartbeat failure detected!")
