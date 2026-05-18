@@ -40,7 +40,7 @@ from utils.config_loader import config
 logger = get_logger(__name__)
 
 # ── Trading universe ──────────────────────────────────────────────────────────
-PAIRS       = ["EUR_USD", "XAU_USD"]        # EURUSD + Gold — right for $100 demo
+PAIRS       = ["EUR_USD", "USD_JPY", "XAU_USD", "US30_USD"]  # all 4 active pairs
 TIMEFRAMES  = ["M15", "H1", "H4", "D1"]
 CANDLE_COUNT = 300
 
@@ -69,7 +69,7 @@ class TradingEngine:
         _use_mt5 = bool(os.getenv("MT5_LOGIN") and os.getenv("MT5_SERVER"))
         if _use_mt5:
             self.broker    = MT5Broker()
-            self.live_feed = MT5LiveFeed(pairs=PAIRS)
+            self.live_feed = MT5LiveFeed(pairs=PAIRS)  # feed tracks all 4 pairs
             logger.info("[Engine] Broker: MetaTrader 5")
         else:
             self.broker    = OANDABroker()
