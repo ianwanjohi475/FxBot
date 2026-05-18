@@ -9,6 +9,10 @@ logger = get_logger(__name__)
 PIP_SIZES = {
     "JPY": 0.01,
     "XAU": 0.01,
+    "XAG": 0.01,
+    "US30": 1.0,   # Dow Jones — 1 index point per pip
+    "NAS": 1.0,
+    "SPX": 1.0,
     "DEFAULT": 0.0001,
 }
 
@@ -55,8 +59,8 @@ class PositionSizer:
         return lot_size
 
     def _pip_size(self, pair: str) -> float:
-        for suffix, size in PIP_SIZES.items():
-            if suffix in pair:
+        for key, size in PIP_SIZES.items():
+            if key != "DEFAULT" and key in pair:
                 return size
         return PIP_SIZES["DEFAULT"]
 

@@ -77,14 +77,27 @@ Examples:
 
 
 def confirm_live_mode() -> bool:
-    """Require explicit confirmation before enabling live trading."""
+    """Require confirmation before enabling live trading.
+    Skips the prompt automatically when MT5 is configured (demo account)."""
+    has_mt5 = os.getenv("MT5_LOGIN") and os.getenv("MT5_SERVER")
+    if has_mt5:
+        # MT5 is always a demo/practice account — safe to auto-confirm
+        print("\n" + "=" * 60)
+        print("  MT5 LIVE MODE — Exness Demo Account")
+        print("=" * 60)
+        print(f"  Login : {os.getenv('MT5_LOGIN')}")
+        print(f"  Server: {os.getenv('MT5_SERVER')}")
+        print("  Orders will be executed on your MT5 demo account.")
+        print("=" * 60)
+        return True
+
+    # OANDA real money — require explicit confirmation
     print("\n" + "=" * 60)
-    print("  ⚠️   LIVE TRADING MODE REQUESTED   ⚠️")
+    print("  WARNING: LIVE TRADING WITH REAL MONEY")
     print("=" * 60)
-    print("You are about to start the bot with REAL MONEY.")
     print("Ensure you have:")
     print("  • A funded OANDA account configured in .env")
-    print("  • Tested your strategy thoroughly in paper mode")
+    print("  • Tested thoroughly in paper mode first")
     print("  • Set appropriate risk limits in config.yaml")
     print("=" * 60)
     answer = input("\nType 'YES I UNDERSTAND' to proceed: ").strip()

@@ -12,8 +12,10 @@ class StopLossCalculator:
     def _pip_size(pair: str) -> float:
         if "JPY" in pair:
             return 0.01
-        if "XAU" in pair:
+        if "XAU" in pair or "XAG" in pair:
             return 0.01
+        if "US30" in pair or "NAS" in pair or "SPX" in pair or "DAX" in pair:
+            return 1.0   # index points
         return 0.0001
 
     def atr_based_sl(self, entry: float, direction: str, atr: float,

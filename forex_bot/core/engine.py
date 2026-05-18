@@ -39,9 +39,11 @@ TIMEFRAMES = ["M15", "H1", "H4", "D1"]
 CANDLE_COUNT = 300
 SCAN_INTERVAL = 60  # seconds between full analysis cycles
 NEWS_WRITE_INTERVAL = 1800  # seconds between news CSV refreshes (30 min)
-MAX_OPEN_TRADES = 3
-MAX_SPREAD_PIPS = 3.0  # 3x normal average
+MAX_OPEN_TRADES = 2           # max concurrent positions ($100 demo — keep exposure low)
+MAX_SPREAD_PIPS = 3.0
 DANGER_WIDE_SPREAD_MULT = 3.0
+FIXED_LOT_SIZE = 0.03         # fixed lot size for every trade
+MIN_RR_RATIO = 1.5            # minimum TP1:SL ratio required before entering
 
 
 class TradingEngine:
@@ -174,7 +176,7 @@ class TradingEngine:
         if len(open_trades) >= MAX_OPEN_TRADES:
             return
         if any(t.pair == pair for t in open_trades):
-            return  # already in a trade on this pair
+            return
 
         # Drawdown pause
         balance = self._account.get("balance", 10000)
@@ -214,8 +216,18 @@ class TradingEngine:
 
         for signal in signals:
             score = self.confluence.score_signal(signal, data, context)
-            self._write_chart_signal(signal, score)  # visualise in MT5 chart EA
+            self._write_chart_signal(signal, score)  # always write to chart for visibility
             if not self.confluence.is_tradeable(score):
+                continue
+
+            # Minimum R:R gate — only trade if TP1 is worth at least MIN_RR_RATIO × SL distance
+            risk_dist = abs(signal.entry_price - signal.sl_price)
+            reward_dist = abs(signal.tp1_price - signal.entry_price)
+            if risk_dist == 0 or (reward_dist / risk_dist) < MIN_RR_RATIO:
+                logger.debug(
+                    f"[Engine] {pair} RR too low "
+                    f"({reward_dist/risk_dist:.2f} < {MIN_RR_RATIO}) — skipping"
+                )
                 continue
 
             # Correlation filter
@@ -224,17 +236,9 @@ class TradingEngine:
                 logger.info(f"[Engine] {pair} correlation block: {corr_reason}")
                 continue
 
-            # Calculate position size
-            lot_size = self.sizer.calculate_lot_size(
-                account_balance=balance,
-                entry_price=current_price,
-                sl_price=signal.sl_price,
-                pair=pair,
-            )
-            dd_mult = self.drawdown.get_position_size_multiplier(balance)
-            lot_size *= dd_mult
-
-            risk_usd = balance * self.sizer.risk_pct
+            # Fixed lot size for demo account
+            lot_size = FIXED_LOT_SIZE
+            risk_usd = round(lot_size * risk_dist * 10000 * 10, 2)  # rough pip value
 
             trade_id = self.execution.open_trade(
                 signal=signal,
@@ -249,12 +253,53 @@ class TradingEngine:
                 self.correlation.add_trade(pair, signal.direction)
                 self.telegram.notify_trade_open(signal, trade_id, lot_size, risk_usd)
                 logger.info(
-                    f"[Engine] TRADE OPENED {trade_id} | {pair} {signal.direction} | "
-                    f"score={score:.1f} strategy={signal.strategy_name}"
+                    f"[Engine] TRADE OPENED {trade_id} | {pair} {signal.direction} "
+                    f"@ {signal.entry_price} | SL={signal.sl_price} TP1={signal.tp1_price} "
+                    f"lot={lot_size} score={score:.1f} strat={signal.strategy_name}"
                 )
-                break  # One trade per pair per cycle
+                break  # one trade per pair per cycle
+
+    def _sync_mt5_positions(self) -> None:
+        """Detect positions closed by MT5 (SL/TP hit) and mark them in our DB."""
+        if not isinstance(self.broker, MT5Broker):
+            return
+        try:
+            open_db_trades = self.db.get_open_trades()
+            if not open_db_trades:
+                return
+            live_mt5 = self.broker.get_open_trades()
+            live_tickets = {t["id"] for t in live_mt5}
+            balance = self._account.get("balance", 10000)
+            for trade in open_db_trades:
+                ticket = trade.oanda_order_id  # MT5 position ticket stored here
+                if not ticket or ticket in live_tickets:
+                    continue
+                # MT5 closed this position (SL/TP hit or manual close)
+                price_info = self.live_feed.get_price(trade.pair)
+                exit_price = (
+                    price_info.get("mid", trade.entry_price) if price_info else trade.entry_price
+                )
+                result = self.execution.close_trade(
+                    trade.trade_id, exit_price, "sl_tp_hit", balance
+                )
+                pnl = result.get("pnl_usd", 0)
+                if pnl > 0:
+                    self.drawdown.register_win()
+                else:
+                    self.drawdown.register_loss()
+                self.correlation.remove_trade(trade.pair)
+                self.telegram.notify_trade_close(trade.trade_id, exit_price, "sl_tp_hit")
+                logger.info(
+                    f"[Engine] {trade.pair} {trade.trade_id} closed by MT5 "
+                    f"(SL/TP) | exit={exit_price} pnl={pnl:+.2f}"
+                )
+        except Exception as e:
+            logger.debug(f"[Engine] MT5 position sync error: {e}")
 
     def _update_open_trades(self):
+        # Sync DB with MT5 first (pick up SL/TP closes that MT5 executed)
+        self._sync_mt5_positions()
+
         open_trades = self.db.get_open_trades()
         for trade in open_trades:
             pair = trade.pair
@@ -272,23 +317,26 @@ class TradingEngine:
             # Check if trailing stop triggered close
             if self.trailing.should_close(trade.trade_id, current_price):
                 balance = self._account.get("balance", 10000)
-                self.execution.close_trade(trade.trade_id, current_price,
-                                           "trailing_stop", balance)
+                result = self.execution.close_trade(
+                    trade.trade_id, current_price, "trailing_stop", balance
+                )
+                pnl = result.get("pnl_usd", 0)
+                if pnl > 0:
+                    self.drawdown.register_win()
+                else:
+                    self.drawdown.register_loss()
                 self.correlation.remove_trade(pair)
-                self.telegram.notify_trade_close(trade.trade_id, current_price,
-                                                  "trailing_stop")
+                self.telegram.notify_trade_close(trade.trade_id, current_price, "trailing_stop")
                 continue
 
-            # Check TP1 for partial close and breakeven
+            # Move SL to breakeven and activate trailing stop when TP1 is hit
             direction = trade.direction
             tp1 = trade.tp1_price
             if tp1 and (
                 (direction == "BUY" and current_price >= tp1) or
                 (direction == "SELL" and current_price <= tp1)
             ):
-                # Move SL to breakeven
                 self.execution.modify_sl(trade.trade_id, trade.entry_price)
-                # Activate trailing stop
                 self.trailing.activate(
                     trade.trade_id, trade.entry_price, direction,
                     atr=self._get_atr(pair),
