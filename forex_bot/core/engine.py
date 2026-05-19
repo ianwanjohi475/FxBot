@@ -83,7 +83,7 @@ class TradingEngine:
         # ── Strategy & scoring ────────────────────────────────────────────────
         self.strategy_manager = StrategyManager(config.get("strategy_weights", {}))
         self.confluence = ConfluenceEngine(
-            min_score=config.get("risk.min_confluence_score", 45)
+            min_score=config.get("risk.min_confluence_score", 60)
         )
         self.adaptive = AdaptiveWeighting()
 
