@@ -129,6 +129,7 @@ class TradingEngine:
         signal.signal(signal.SIGTERM, self._handle_signal)
 
         self.broker.connect()
+        self._deploy_mt5_ea_files()   # auto-copy latest EA/indicator files to MT5
         self.execution = ExecutionEngine(self.broker, self.db, self.is_paper)
         self.live_feed.start()
         self.live_feed.subscribe(self._on_price_tick)
@@ -141,6 +142,40 @@ class TradingEngine:
         self.telegram.send_message("FxBot started | pairs: " + ", ".join(PAIRS))
         logger.info("[Engine] Bot is live. Starting real-time main loop.")
         self._main_loop()
+
+    def _deploy_mt5_ea_files(self) -> None:
+        """Auto-copy latest EA and indicator files from repo into MT5 on every startup."""
+        import shutil
+        try:
+            import MetaTrader5 as mt5
+            info = mt5.terminal_info()
+            if info is None:
+                return
+            ea_src = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "..", "mt5_ea")
+            )
+            experts_dst    = os.path.join(info.data_path, "MQL5", "Experts")
+            indicators_dst = os.path.join(info.data_path, "MQL5", "Indicators")
+            os.makedirs(experts_dst,    exist_ok=True)
+            os.makedirs(indicators_dst, exist_ok=True)
+
+            # EA → Experts folder
+            for fname in ["FxBotSignals.mq5"]:
+                src = os.path.join(ea_src, fname)
+                dst = os.path.join(experts_dst, fname)
+                if os.path.exists(src):
+                    shutil.copy2(src, dst)
+                    logger.info(f"[Engine] Deployed {fname} → MT5/Experts")
+
+            # Indicator → Indicators folder
+            for fname in ["FxBotPanel.mq5"]:
+                src = os.path.join(ea_src, fname)
+                dst = os.path.join(indicators_dst, fname)
+                if os.path.exists(src):
+                    shutil.copy2(src, dst)
+                    logger.info(f"[Engine] Deployed {fname} → MT5/Indicators")
+        except Exception as e:
+            logger.debug(f"[Engine] EA deploy skipped: {e}")
 
     def _main_loop(self):
         while self.is_running and not self._shutdown_event.is_set():
