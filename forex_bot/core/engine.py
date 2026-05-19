@@ -116,7 +116,11 @@ class TradingEngine:
         # pairs flagged by tick handler as needing urgent analysis
         self._urgent_pairs:   Set[str] = set()
         # live score dashboard: pair → {score, direction, strategy, regime, updated}
-        self._pair_scores:    dict  = {}
+        self._pair_scores:    dict  = {
+            p: {"score": 0, "direction": "--", "strategy": "starting",
+                "regime": "?", "updated": "--"}
+            for p in PAIRS
+        }
         self._current_regime: dict  = {}
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -214,6 +218,9 @@ class TradingEngine:
                         self._safe_analyze(pair)
 
                 self.adaptive.update_weights()
+
+                # Always write live scores so the dashboard panel stays populated
+                self._write_scores_file()
 
                 now_ts = time.time()
                 if now_ts - self._last_news_write >= NEWS_WRITE_INTERVAL:
@@ -407,31 +414,38 @@ class TradingEngine:
         # Wide spread check (news spike / thin market)
         normal_spread = self._get_normal_spread(pair)
         if spread_pips > normal_spread * DANGER_WIDE_SPREAD_MULT:
-            logger.debug(f"[Engine] {pair} spread {spread_pips:.1f} pips — skipping")
+            self._mark_pair_status(pair, "wide_spread")
+            logger.info(f"[Engine] {pair} spread {spread_pips:.1f}p > {normal_spread * DANGER_WIDE_SPREAD_MULT:.1f}p — skip")
             return
 
         # News blackout
         can_trade, reason = self.news_filter.can_trade(pair, now)
         if not can_trade:
-            logger.debug(f"[Engine] {pair} news block: {reason}")
+            self._mark_pair_status(pair, "news_block")
+            logger.info(f"[Engine] {pair} news block: {reason}")
             return
 
         # Position limits
         open_trades = self.db.get_open_trades()
         if len(open_trades) >= MAX_OPEN_TRADES:
+            self._mark_pair_status(pair, "max_trades")
             return
         if any(t.pair == pair for t in open_trades):
-            return   # already have a trade on this pair
+            self._mark_pair_status(pair, "in_trade")
+            return
 
         # Drawdown guards
         balance = self._account.get("balance", 10000)
         if self.drawdown.should_stop_trading_today(balance):
+            self._mark_pair_status(pair, "drawdown_limit")
             return
         if self.drawdown.should_pause_after_losses(now):
+            self._mark_pair_status(pair, "loss_pause")
             return
 
         data = self._data_cache.get(pair, {})
         if not data:
+            self._mark_pair_status(pair, "no_data")
             return
 
         session_info = SessionDetector.get_session_info(now)
@@ -681,6 +695,17 @@ class TradingEngine:
                 fh.writelines(existing)
         except Exception:
             pass
+
+    def _mark_pair_status(self, pair: str, reason: str) -> None:
+        """Update pair score entry with a skip reason so the dashboard shows it."""
+        existing = self._pair_scores.get(pair, {})
+        self._pair_scores[pair] = {
+            "score":     existing.get("score", 0),
+            "direction": existing.get("direction", "--"),
+            "strategy":  reason,
+            "regime":    self._current_regime.get(pair, "?"),
+            "updated":   datetime.now(tz=pytz.utc).strftime("%H:%M"),
+        }
 
     def _write_scores_file(self) -> None:
         """Write live scores to both MT5 Files folder and local data/ folder."""
