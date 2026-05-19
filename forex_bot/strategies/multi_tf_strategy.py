@@ -24,7 +24,8 @@ class MultiTimeframeStrategy:
             if tf not in data or data[tf] is None or len(data[tf]) < 210:
                 continue
             bias = self._get_tf_bias(data[tf], current_price)
-            votes[bias] += 1 if bias in ("BUY", "SELL") else 0
+            if bias in ("BUY", "SELL"):
+                votes[bias] += 1
             votes["details"][tf] = bias
 
         buy_votes = votes["BUY"]

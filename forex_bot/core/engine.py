@@ -114,6 +114,7 @@ class TradingEngine:
         self._account:        dict  = {}
         self._last_news_write: float = 0.0
         self._last_data_refresh: float = 0.0
+        self._last_reconcile: float = 0.0
         # candle-close tracking: "PAIR_TF" → last candle open timestamp (int)
         self._last_candle_ts: dict  = {}
         # pairs flagged by tick handler as needing urgent analysis
@@ -156,25 +157,42 @@ class TradingEngine:
 
     def _reconcile_db_on_startup(self) -> None:
         """Close any DB trades that no longer exist in MT5 (phantom paper/old trades)."""
+        self._reconcile_db(reason="reconcile_startup")
+
+    def _reconcile_db(self, reason: str = "reconcile") -> int:
+        """
+        Compare open DB trades against live MT5 positions.
+        Any DB trade whose oanda_order_id is not in the live MT5 tickets
+        (or has no broker ID at all) is marked CLOSED as phantom.
+        Returns number of trades reconciled.
+        """
         try:
             open_db = self.db.get_open_trades()
             if not open_db:
-                return
-            live_ids = {str(t["id"]) for t in self.broker.get_open_trades()}
+                return 0
+            # Live MT5 ticket IDs (strings)
+            live_ids: set = {str(t["id"]) for t in self.broker.get_open_trades()}
             closed = 0
             for t in open_db:
-                tid = str(getattr(t, "trade_id", None) or getattr(t, "id", ""))
-                if tid and tid not in live_ids:
+                broker_id = str(t.oanda_order_id or "").strip()
+                # Close if no broker ID, or broker ID not in live MT5 positions
+                if not broker_id or broker_id not in live_ids:
                     try:
-                        self.db.close_trade(tid, pnl_usd=0.0, close_price=0.0,
-                                            close_reason="reconcile_startup")
+                        self.db.update_trade(t.trade_id, {
+                            "status": "CLOSED",
+                            "exit_reason": reason,
+                            "exit_time": datetime.now(tz=pytz.utc),
+                            "pnl_usd": 0.0,
+                        })
                         closed += 1
                     except Exception:
                         pass
             if closed:
-                logger.info(f"[Engine] Reconciled {closed} phantom trade(s) from DB on startup")
+                logger.info(f"[Engine] Reconciled {closed} phantom trade(s) [{reason}]")
+            return closed
         except Exception as e:
-            logger.debug(f"[Engine] Startup reconcile skipped: {e}")
+            logger.debug(f"[Engine] Reconcile skipped: {e}")
+            return 0
 
     def _deploy_mt5_ea_files(self) -> None:
         """Auto-copy and auto-compile latest EA/indicator files into MT5 on every startup."""
@@ -232,6 +250,11 @@ class TradingEngine:
                 if now_ts - self._last_data_refresh >= DATA_REFRESH_INTERVAL:
                     self._refresh_historical_data()
                     self._last_data_refresh = now_ts
+
+                # Periodic DB↔MT5 reconcile every 5 minutes
+                if now_ts - self._last_reconcile >= 300:
+                    self._reconcile_db(reason="reconcile_periodic")
+                    self._last_reconcile = now_ts
 
                 # ── Candle-close detection → immediate analysis ───────────────
                 candle_pairs: Set[str] = set()
