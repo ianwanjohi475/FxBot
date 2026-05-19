@@ -133,7 +133,7 @@ class TradingEngine:
         signal.signal(signal.SIGTERM, self._handle_signal)
 
         self.broker.connect()
-        self._deploy_mt5_ea_files()   # auto-copy latest EA/indicator files to MT5
+        self._deploy_mt5_ea_files()
         self.execution = ExecutionEngine(self.broker, self.db, self.is_paper)
         self.live_feed.start()
         self.live_feed.subscribe(self._on_price_tick)
@@ -141,11 +141,34 @@ class TradingEngine:
 
         self._load_initial_data()
         self._update_account()
+        self._reconcile_db_on_startup()   # clear phantom trades before first cycle
         self.is_running = True
 
         self.telegram.send_message("FxBot started | pairs: " + ", ".join(PAIRS))
         logger.info("[Engine] Bot is live. Starting real-time main loop.")
         self._main_loop()
+
+    def _reconcile_db_on_startup(self) -> None:
+        """Close any DB trades that no longer exist in MT5 (phantom paper/old trades)."""
+        try:
+            open_db = self.db.get_open_trades()
+            if not open_db:
+                return
+            live_ids = {str(t["id"]) for t in self.broker.get_open_trades()}
+            closed = 0
+            for t in open_db:
+                tid = str(getattr(t, "trade_id", None) or getattr(t, "id", ""))
+                if tid and tid not in live_ids:
+                    try:
+                        self.db.close_trade(tid, pnl_usd=0.0, close_price=0.0,
+                                            close_reason="reconcile_startup")
+                        closed += 1
+                    except Exception:
+                        pass
+            if closed:
+                logger.info(f"[Engine] Reconciled {closed} phantom trade(s) from DB on startup")
+        except Exception as e:
+            logger.debug(f"[Engine] Startup reconcile skipped: {e}")
 
     def _deploy_mt5_ea_files(self) -> None:
         """Auto-copy and auto-compile latest EA/indicator files into MT5 on every startup."""
