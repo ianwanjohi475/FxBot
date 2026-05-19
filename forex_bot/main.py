@@ -267,6 +267,15 @@ def main():
     # ------------------------------------------------------------------
     # Normal operation: start the trading engine with auto-restart
     # ------------------------------------------------------------------
+
+    # Launch live score panel window (separate floating window)
+    try:
+        from dashboard.live_panel import launch_panel_thread, find_scores_file
+        _scores_path = find_scores_file()
+        launch_panel_thread(_scores_path)
+    except Exception as _pe:
+        logger.debug(f"Score panel not started: {_pe}")
+
     restart_delay = 30  # seconds between restart attempts
     attempt = 0
 

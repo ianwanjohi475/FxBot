@@ -144,8 +144,8 @@ class TradingEngine:
         self._main_loop()
 
     def _deploy_mt5_ea_files(self) -> None:
-        """Auto-copy latest EA and indicator files from repo into MT5 on every startup."""
-        import shutil
+        """Auto-copy and auto-compile latest EA/indicator files into MT5 on every startup."""
+        import shutil, subprocess
         try:
             import MetaTrader5 as mt5
             info = mt5.terminal_info()
@@ -159,21 +159,27 @@ class TradingEngine:
             os.makedirs(experts_dst,    exist_ok=True)
             os.makedirs(indicators_dst, exist_ok=True)
 
-            # EA → Experts folder
-            for fname in ["FxBotSignals.mq5"]:
-                src = os.path.join(ea_src, fname)
-                dst = os.path.join(experts_dst, fname)
-                if os.path.exists(src):
-                    shutil.copy2(src, dst)
-                    logger.info(f"[Engine] Deployed {fname} → MT5/Experts")
+            deployments = [
+                ("FxBotSignals.mq5", experts_dst),
+                ("FxBotPanel.mq5",   indicators_dst),
+            ]
+            metaeditor = os.path.join(info.path, "metaeditor64.exe")
 
-            # Indicator → Indicators folder
-            for fname in ["FxBotPanel.mq5"]:
+            for fname, dst_dir in deployments:
                 src = os.path.join(ea_src, fname)
-                dst = os.path.join(indicators_dst, fname)
-                if os.path.exists(src):
-                    shutil.copy2(src, dst)
-                    logger.info(f"[Engine] Deployed {fname} → MT5/Indicators")
+                dst = os.path.join(dst_dir, fname)
+                if not os.path.exists(src):
+                    continue
+                shutil.copy2(src, dst)
+                logger.info(f"[Engine] Deployed {fname} → {dst_dir}")
+                # Auto-compile so MT5 picks up the new .ex5 immediately
+                if os.path.exists(metaeditor):
+                    subprocess.Popen(
+                        [metaeditor, f"/compile:{dst}", "/log"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    logger.info(f"[Engine] Compiling {fname} via MetaEditor")
         except Exception as e:
             logger.debug(f"[Engine] EA deploy skipped: {e}")
 
@@ -677,27 +683,41 @@ class TradingEngine:
             pass
 
     def _write_scores_file(self) -> None:
-        """Write current live scores for all pairs to fxbot_scores.csv for the panel indicator."""
+        """Write live scores to both MT5 Files folder and local data/ folder."""
+        session = SessionDetector.get_session_info(datetime.now(tz=pytz.utc))["primary_session"]
+
+        def _build_csv() -> str:
+            lines = ["pair,score,direction,strategy,regime,session,updated"]
+            for pair in PAIRS:
+                d = self._pair_scores.get(pair, {})
+                lines.append(
+                    f"{pair},{d.get('score',0):.0f},{d.get('direction','--')},"
+                    f"{d.get('strategy','scanning')},{d.get('regime','?')},"
+                    f"{session},{d.get('updated','--')}"
+                )
+            return "\n".join(lines) + "\n"
+
+        content = _build_csv()
+
+        # 1. Write to MT5 Files folder (for FxBotPanel MQL5 indicator)
         try:
             import MetaTrader5 as mt5
             info = mt5.terminal_info()
-            if info is None:
-                return
-            path = os.path.join(info.data_path, "MQL5", "Files", "fxbot_scores.csv")
-            session = SessionDetector.get_session_info(datetime.now(tz=pytz.utc))["primary_session"]
-            with open(path, "w", encoding="utf-8") as f:
-                f.write("pair,score,direction,strategy,regime,session,updated\n")
-                for pair in PAIRS:
-                    d = self._pair_scores.get(pair, {})
-                    f.write(
-                        f"{pair},"
-                        f"{d.get('score', 0):.0f},"
-                        f"{d.get('direction','--')},"
-                        f"{d.get('strategy','scanning')},"
-                        f"{d.get('regime','?')},"
-                        f"{session},"
-                        f"{d.get('updated','--')}\n"
-                    )
+            if info:
+                mt5_path = os.path.join(info.data_path, "MQL5", "Files", "fxbot_scores.csv")
+                with open(mt5_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+        except Exception:
+            pass
+
+        # 2. Write to local data/ folder (for Python live_panel.py)
+        try:
+            local_dir = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "..", "data")
+            )
+            os.makedirs(local_dir, exist_ok=True)
+            with open(os.path.join(local_dir, "fxbot_scores.csv"), "w", encoding="utf-8") as f:
+                f.write(content)
         except Exception:
             pass
 
