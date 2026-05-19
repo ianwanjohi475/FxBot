@@ -386,8 +386,10 @@ class TradingEngine:
                 continue
 
             # Get last closed candle close price
-            df = (self._data_cache.get(pair) or {}).get("M15") or \
-                 (self._data_cache.get(pair) or {}).get("H1")
+            pair_data = self._data_cache.get(pair) or {}
+            df = pair_data.get("M15")
+            if df is None or df.empty:
+                df = pair_data.get("H1")
             if df is None or len(df) < 2:
                 continue
 
@@ -465,7 +467,9 @@ class TradingEngine:
         """Return 'trending', 'ranging', or 'volatile' based on H1 ADX + ATR."""
         from indicators.trend import TrendIndicators
         from indicators.volatility import VolatilityIndicators
-        df = data.get("H1") or data.get("M15")
+        df = data.get("H1")
+        if df is None or df.empty:
+            df = data.get("M15")
         if df is None or len(df) < 30:
             return "trending"
         try:
