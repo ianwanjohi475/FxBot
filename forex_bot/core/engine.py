@@ -149,7 +149,7 @@ class TradingEngine:
 
     def _deploy_mt5_ea_files(self) -> None:
         """Auto-copy and auto-compile latest EA/indicator files into MT5 on every startup."""
-        import shutil, subprocess
+        import shutil, subprocess, glob
         try:
             import MetaTrader5 as mt5
             info = mt5.terminal_info()
@@ -158,32 +158,37 @@ class TradingEngine:
             ea_src = os.path.abspath(
                 os.path.join(os.path.dirname(__file__), "..", "..", "mt5_ea")
             )
-            experts_dst    = os.path.join(info.data_path, "MQL5", "Experts")
-            indicators_dst = os.path.join(info.data_path, "MQL5", "Indicators")
-            os.makedirs(experts_dst,    exist_ok=True)
-            os.makedirs(indicators_dst, exist_ok=True)
 
-            deployments = [
-                ("FxBotSignals.mq5", experts_dst),
-                ("FxBotPanel.mq5",   indicators_dst),
-            ]
+            # Collect all candidate MQL5 data folders (handles multiple terminals)
+            appdata = os.environ.get("APPDATA", "")
+            base = os.path.join(appdata, "MetaQuotes", "Terminal")
+            terminal_dirs = glob.glob(os.path.join(base, "*", "MQL5")) if appdata else []
+            # Always include the one reported by the connected terminal
+            primary = os.path.join(info.data_path, "MQL5")
+            all_mql5 = list({primary} | set(terminal_dirs))
+
             metaeditor = os.path.join(info.path, "metaeditor64.exe")
 
-            for fname, dst_dir in deployments:
-                src = os.path.join(ea_src, fname)
-                dst = os.path.join(dst_dir, fname)
-                if not os.path.exists(src):
-                    continue
-                shutil.copy2(src, dst)
-                logger.info(f"[Engine] Deployed {fname} → {dst_dir}")
-                # Auto-compile so MT5 picks up the new .ex5 immediately
-                if os.path.exists(metaeditor):
-                    subprocess.Popen(
-                        [metaeditor, f"/compile:{dst}", "/log"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
-                    logger.info(f"[Engine] Compiling {fname} via MetaEditor")
+            for mql5_dir in all_mql5:
+                experts_dst    = os.path.join(mql5_dir, "Experts")
+                indicators_dst = os.path.join(mql5_dir, "Indicators")
+                os.makedirs(experts_dst,    exist_ok=True)
+                os.makedirs(indicators_dst, exist_ok=True)
+
+                for fname, dst_dir in [("FxBotSignals.mq5", experts_dst),
+                                       ("FxBotPanel.mq5",   indicators_dst)]:
+                    src = os.path.join(ea_src, fname)
+                    dst = os.path.join(dst_dir, fname)
+                    if not os.path.exists(src):
+                        continue
+                    shutil.copy2(src, dst)
+                    logger.info(f"[Engine] Deployed {fname} → {dst_dir}")
+                    if os.path.exists(metaeditor):
+                        subprocess.Popen(
+                            [metaeditor, f"/compile:{dst}", "/log"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
         except Exception as e:
             logger.debug(f"[Engine] EA deploy skipped: {e}")
 
