@@ -288,6 +288,66 @@ class TradingEngine:
             return False
 
     # ══════════════════════════════════════════════════════════════════════════
+    # Market regime detection + smart strategy weighting
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _detect_regime(self, pair: str, data: dict) -> str:
+        """Return 'trending', 'ranging', or 'volatile' based on H1 ADX + ATR."""
+        from indicators.trend import TrendIndicators
+        from indicators.volatility import VolatilityIndicators
+        df = data.get("H1") or data.get("M15")
+        if df is None or len(df) < 30:
+            return "trending"
+        try:
+            adx_val = TrendIndicators.adx(df, 14)["adx"].iloc[-1]
+            atr_s   = VolatilityIndicators.atr(df, 14)
+            atr_now = atr_s.iloc[-1]
+            atr_avg = atr_s.iloc[-20:].mean()
+            if atr_now > atr_avg * 1.6:
+                return "volatile"
+            if adx_val > 27:
+                return "trending"
+            return "ranging"
+        except Exception:
+            return "trending"
+
+    def _tune_weights_for_regime(self, regime: str, pair: str) -> None:
+        """Boost strategies best suited for the detected market regime."""
+        sm = self.strategy_manager
+        for k in sm.weights:
+            sm.weights[k] = 1.0
+
+        if regime == "trending":
+            for s in ("trend_following", "momentum", "smc_strategy", "breakout", "swing"):
+                if s in sm.weights: sm.weights[s] = 2.0
+            for s in ("mean_reversion", "grid", "carry_trade"):
+                if s in sm.weights: sm.weights[s] = 0.2
+        elif regime == "ranging":
+            for s in ("mean_reversion", "vwap_strategy", "scalping", "ichimoku_strategy"):
+                if s in sm.weights: sm.weights[s] = 2.0
+            for s in ("breakout", "trend_following", "momentum"):
+                if s in sm.weights: sm.weights[s] = 0.4
+        elif regime == "volatile":
+            for s in ("breakout", "momentum", "smc_strategy", "price_action"):
+                if s in sm.weights: sm.weights[s] = 2.0
+            for s in ("mean_reversion", "carry_trade", "grid"):
+                if s in sm.weights: sm.weights[s] = 0.2
+
+        # Pair-specific boosts on top of regime weights
+        if "XAU" in pair:
+            for s in ("smc_strategy", "momentum", "price_action", "wyckoff"):
+                if s in sm.weights: sm.weights[s] = min(sm.weights[s] * 1.4, 2.0)
+        elif "GBP" in pair and "JPY" in pair:
+            for s in ("trend_following", "momentum", "session_strategy"):
+                if s in sm.weights: sm.weights[s] = min(sm.weights[s] * 1.3, 2.0)
+        elif "US30" in pair:
+            for s in ("trend_following", "breakout", "vwap_strategy"):
+                if s in sm.weights: sm.weights[s] = min(sm.weights[s] * 1.3, 2.0)
+        elif "JPY" in pair:
+            for s in ("trend_following", "session_strategy", "carry_trade"):
+                if s in sm.weights: sm.weights[s] = min(sm.weights[s] * 1.2, 2.0)
+
+    # ══════════════════════════════════════════════════════════════════════════
     # Core analysis
     # ══════════════════════════════════════════════════════════════════════════
 
@@ -334,6 +394,10 @@ class TradingEngine:
         session      = session_info["primary_session"]
         news_events  = self.news_filter.get_upcoming_events(pair, hours=4)
         news_risk    = self.news_filter.get_news_risk_score(pair, hours_ahead=2)
+
+        regime = self._detect_regime(pair, data)
+        self._tune_weights_for_regime(regime, pair)
+        logger.debug(f"[Engine] {pair} regime={regime} session={session}")
 
         signals = self.strategy_manager.analyze_all(
             data=data,
