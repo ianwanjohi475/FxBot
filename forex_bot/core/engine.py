@@ -45,8 +45,10 @@ TIMEFRAMES  = ["M15", "H1", "H4", "D1"]
 CANDLE_COUNT = 300
 
 # ── Timing ────────────────────────────────────────────────────────────────────
-SCAN_INTERVAL       = 15    # seconds — full analysis fallback (candle-close = faster)
-NEWS_WRITE_INTERVAL = 1800  # 30 min between news CSV writes
+SCAN_INTERVAL            = 5     # seconds — frequent scoring for live dashboard
+LIVE_SCORE_INTERVAL      = 2     # seconds — intra-candle momentum update thread
+DATA_REFRESH_INTERVAL    = 15    # seconds — how often to pull new OHLC candles
+NEWS_WRITE_INTERVAL      = 1800  # 30 min between news CSV writes
 
 # ── Risk / position limits ────────────────────────────────────────────────────
 MAX_OPEN_TRADES       = 2      # max concurrent positions on $100 account
@@ -111,6 +113,7 @@ class TradingEngine:
         self._data_cache:     dict  = {p: {} for p in PAIRS}
         self._account:        dict  = {}
         self._last_news_write: float = 0.0
+        self._last_data_refresh: float = 0.0
         # candle-close tracking: "PAIR_TF" → last candle open timestamp (int)
         self._last_candle_ts: dict  = {}
         # pairs flagged by tick handler as needing urgent analysis
@@ -122,6 +125,8 @@ class TradingEngine:
             for p in PAIRS
         }
         self._current_regime: dict  = {}
+        # base scores from last full strategy analysis (live thread adjusts from here)
+        self._base_scores:    dict  = {p: 0.0 for p in PAIRS}
 
     # ══════════════════════════════════════════════════════════════════════════
     # Startup / shutdown
@@ -143,6 +148,7 @@ class TradingEngine:
         self._update_account()
         self._reconcile_db_on_startup()   # clear phantom trades before first cycle
         self.is_running = True
+        self._start_live_score_thread()   # 2-second intra-candle momentum updates
 
         self.telegram.send_message("FxBot started | pairs: " + ", ".join(PAIRS))
         logger.info("[Engine] Bot is live. Starting real-time main loop.")
@@ -221,7 +227,11 @@ class TradingEngine:
                 self._update_account()
                 self._check_drawdown_limits()
                 self._update_open_trades()       # trailing stops + MT5 sync
-                self._refresh_historical_data()  # append latest candles to cache
+                # Rate-limit MT5 OHLC pulls to every 15s; strategy scoring runs every 5s
+                now_ts = time.time()
+                if now_ts - self._last_data_refresh >= DATA_REFRESH_INTERVAL:
+                    self._refresh_historical_data()
+                    self._last_data_refresh = now_ts
 
                 # ── Candle-close detection → immediate analysis ───────────────
                 candle_pairs: Set[str] = set()
@@ -329,6 +339,87 @@ class TradingEngine:
 
         except Exception:
             pass   # tick handler must never crash
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Live intra-candle score updater  (runs every 2 seconds in own thread)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _start_live_score_thread(self):
+        """Background thread: adjusts scores every 2s based on live price momentum."""
+        def _run():
+            while self.is_running:
+                try:
+                    self._tick_live_scores()
+                except Exception:
+                    pass
+                time.sleep(LIVE_SCORE_INTERVAL)
+        t = threading.Thread(target=_run, daemon=True, name="LiveScoreThread")
+        t.start()
+
+    def _tick_live_scores(self):
+        """
+        Fast intra-candle adjustment: nudges each pair's displayed score by ±4 pts
+        depending on whether the live price is moving toward or away from the signal.
+        This gives the user a live, changing score between full analysis cycles.
+        """
+        changed = False
+        for pair in PAIRS:
+            last = self._pair_scores.get(pair, {})
+            base = self._base_scores.get(pair, 0.0)
+            if base == 0:
+                continue
+
+            strategy = last.get("strategy", "")
+            if strategy in ("wide_spread", "news_block", "drawdown_limit",
+                            "loss_pause", "no_data", "starting"):
+                continue
+
+            direction = last.get("direction", "--")
+            if direction not in ("BUY", "SELL"):
+                continue
+
+            price_info = self.live_feed.get_price(pair)
+            if not price_info:
+                continue
+            current = price_info.get("mid", 0)
+            if not current:
+                continue
+
+            # Get last closed candle close price
+            df = (self._data_cache.get(pair) or {}).get("M15") or \
+                 (self._data_cache.get(pair) or {}).get("H1")
+            if df is None or len(df) < 2:
+                continue
+
+            try:
+                prev_close = float(df["close"].iloc[-1])
+                if "JPY" in pair:
+                    pip_mult = 100.0
+                elif "XAU" in pair:
+                    pip_mult = 10.0
+                elif "US30" in pair:
+                    pip_mult = 1.0
+                else:
+                    pip_mult = 10000.0
+
+                move_pips = (current - prev_close) * pip_mult
+                # Momentum delta: BUY favours upward price move; SELL favours downward
+                if direction == "BUY":
+                    delta = round(min(max(move_pips * 0.4, -4.0), 4.0), 1)
+                else:
+                    delta = round(min(max(-move_pips * 0.4, -4.0), 4.0), 1)
+
+                live_score = round(min(max(base + delta, 0), 100), 1)
+                if abs(live_score - last.get("score", 0)) >= 0.5:
+                    updated = dict(last)
+                    updated["score"] = live_score
+                    self._pair_scores[pair] = updated
+                    changed = True
+            except Exception:
+                pass
+
+        if changed:
+            self._write_scores_file()
 
     # ══════════════════════════════════════════════════════════════════════════
     # Candle-close detection
@@ -446,23 +537,14 @@ class TradingEngine:
             logger.info(f"[Engine] {pair} spread {spread_pips:.1f}p > {normal_spread * DANGER_WIDE_SPREAD_MULT:.1f}p — skip")
             return
 
-        # News blackout
+        # News blackout — hard block (no scoring when imminent high-impact news)
         can_trade, reason = self.news_filter.can_trade(pair, now)
         if not can_trade:
             self._mark_pair_status(pair, "news_block")
             logger.info(f"[Engine] {pair} news block: {reason}")
             return
 
-        # Position limits
-        open_trades = self.db.get_open_trades()
-        if len(open_trades) >= MAX_OPEN_TRADES:
-            self._mark_pair_status(pair, "max_trades")
-            return
-        if any(t.pair == pair for t in open_trades):
-            self._mark_pair_status(pair, "in_trade")
-            return
-
-        # Drawdown guards
+        # Drawdown guards — hard block
         balance = self._account.get("balance", 10000)
         if self.drawdown.should_stop_trading_today(balance):
             self._mark_pair_status(pair, "drawdown_limit")
@@ -475,6 +557,17 @@ class TradingEngine:
         if not data:
             self._mark_pair_status(pair, "no_data")
             return
+
+        # Soft blocks: max_trades / in_trade → still score for live dashboard, skip execution
+        open_trades = self.db.get_open_trades()
+        can_execute = True
+        exec_block  = None
+        if len(open_trades) >= MAX_OPEN_TRADES:
+            can_execute = False
+            exec_block  = "max_trades"
+        elif any(t.pair == pair for t in open_trades):
+            can_execute = False
+            exec_block  = "in_trade"
 
         session_info = SessionDetector.get_session_info(now)
         session      = session_info["primary_session"]
@@ -514,6 +607,10 @@ class TradingEngine:
                 best_dir   = signal.direction
                 best_strat = signal.strategy_name
             self._write_chart_signal(signal, score)   # always draw — even if not traded
+
+            if not can_execute:
+                continue  # soft-blocked: still score + draw, but no order
+
             if not self.confluence.is_tradeable(score):
                 continue
 
@@ -552,11 +649,12 @@ class TradingEngine:
                 )
                 break   # one trade per pair per cycle
 
-        # Always update live score dashboard (shown in FxBotPanel sub-window)
+        # Always update live score dashboard
+        self._base_scores[pair] = best_score   # live thread adjusts from this base
         self._pair_scores[pair] = {
             "score":     best_score,
             "direction": best_dir,
-            "strategy":  best_strat,
+            "strategy":  exec_block if exec_block else best_strat,
             "regime":    self._current_regime.get(pair, "?"),
             "updated":   datetime.now(tz=pytz.utc).strftime("%H:%M"),
         }

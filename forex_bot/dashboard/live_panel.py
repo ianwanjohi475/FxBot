@@ -40,8 +40,9 @@ def score_color(s: int) -> str:
     return RED_DIM
 
 
-def score_bar(s: int) -> str:
-    filled = round(s / 100 * BAR_CHARS)
+def score_bar(s) -> str:
+    val = int(round(float(s)))
+    filled = round(val / 100 * BAR_CHARS)
     return "█" * filled + "░" * (BAR_CHARS - filled)
 
 
@@ -210,7 +211,10 @@ class LivePanel:
         for i, row in enumerate(data[:6]):
             pair    = row.get("pair", "").replace("_USD", "").replace("_", "")
             sc_raw  = row.get("score", "0")
-            sc      = int(sc_raw) if sc_raw.isdigit() else 0
+            try:
+                sc = int(round(float(sc_raw)))
+            except (ValueError, TypeError):
+                sc = 0
             dirn    = row.get("direction", "--")
             strat   = row.get("strategy", "scanning")[:20]
             regime  = row.get("regime", "?")
@@ -232,8 +236,15 @@ class LivePanel:
 
             if sc > best_score and dirn not in ("--", "NONE"):
                 best_score = sc
-                emoji = "✅" if sc >= 60 else "👁"
-                action = "READY TO EXECUTE" if sc >= 60 else "WATCHING"
+                if sc >= 60:
+                    emoji  = "✅"
+                    action = "READY TO FIRE  [threshold: 60]"
+                elif sc >= 45:
+                    emoji  = "👁"
+                    action = f"WATCHING  ({60 - sc} pts to threshold)"
+                else:
+                    emoji  = "·"
+                    action = "building confluence..."
                 best_text = f"  {emoji} BEST: {pair} {dir_txt}  {sc}/100 — {action}"
                 best_clr  = sc_clr
 
