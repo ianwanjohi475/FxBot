@@ -40,7 +40,7 @@ from utils.config_loader import config
 logger = get_logger(__name__)
 
 # ── Trading universe ──────────────────────────────────────────────────────────
-PAIRS       = ["EUR_USD", "USD_JPY", "XAU_USD", "US30_USD"]  # all 4 active pairs
+PAIRS       = ["EUR_USD", "USD_JPY", "XAU_USD", "US30_USD", "GBP_JPY"]  # 5 active pairs
 TIMEFRAMES  = ["M15", "H1", "H4", "D1"]
 CANDLE_COUNT = 300
 
