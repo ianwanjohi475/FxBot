@@ -148,6 +148,7 @@ void DrawSignals()
    bool   hdr        = true;
    int    drawn      = 0;
    int    maxHistory = 6;
+   datetime maxAge   = TimeCurrent() - 8 * 3600;  // ignore signals older than 8h
 
    // store all matching rows
    string dirs[],  entries[], sls[], tp1s[], tp2s[], tp3s[];
@@ -163,6 +164,10 @@ void DrawSignals()
       string p[];
       if(StringSplit(line, ',', p) < 10) continue;
       if(NormSym(p[0]) != curSym) continue;
+
+      // Skip signals older than 8 hours
+      datetime sigTime = StringToTime(p[9]);
+      if(sigTime > 0 && sigTime < maxAge) continue;
 
       int r = rowCount;
       dirs[r]    = p[1];

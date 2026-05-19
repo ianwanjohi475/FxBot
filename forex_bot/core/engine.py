@@ -115,6 +115,9 @@ class TradingEngine:
         self._last_candle_ts: dict  = {}
         # pairs flagged by tick handler as needing urgent analysis
         self._urgent_pairs:   Set[str] = set()
+        # live score dashboard: pair → {score, direction, strategy, regime, updated}
+        self._pair_scores:    dict  = {}
+        self._current_regime: dict  = {}
 
     # ══════════════════════════════════════════════════════════════════════════
     # Startup / shutdown
@@ -396,6 +399,7 @@ class TradingEngine:
         news_risk    = self.news_filter.get_news_risk_score(pair, hours_ahead=2)
 
         regime = self._detect_regime(pair, data)
+        self._current_regime[pair] = regime
         self._tune_weights_for_regime(regime, pair)
         logger.debug(f"[Engine] {pair} regime={regime} session={session}")
 
@@ -417,8 +421,15 @@ class TradingEngine:
             "account_balance": balance,
         }
 
+        best_score = 0.0
+        best_dir   = "NONE"
+        best_strat = "scanning"
         for signal in signals:
             score = self.confluence.score_signal(signal, data, context)
+            if score > best_score:
+                best_score = score
+                best_dir   = signal.direction
+                best_strat = signal.strategy_name
             self._write_chart_signal(signal, score)   # always draw — even if not traded
             if not self.confluence.is_tradeable(score):
                 continue
@@ -457,6 +468,16 @@ class TradingEngine:
                     f"lot={lot_size} score={score:.1f} strat={signal.strategy_name}"
                 )
                 break   # one trade per pair per cycle
+
+        # Always update live score dashboard (shown in FxBotPanel sub-window)
+        self._pair_scores[pair] = {
+            "score":     best_score,
+            "direction": best_dir,
+            "strategy":  best_strat,
+            "regime":    self._current_regime.get(pair, "?"),
+            "updated":   datetime.now(tz=pytz.utc).strftime("%H:%M"),
+        }
+        self._write_scores_file()
 
     # ══════════════════════════════════════════════════════════════════════════
     # Open trade management
@@ -617,6 +638,31 @@ class TradingEngine:
                 fh.write("pair,direction,entry,sl,tp1,tp2,tp3,strategy,score,timestamp\n")
                 fh.write(new_line)
                 fh.writelines(existing)
+        except Exception:
+            pass
+
+    def _write_scores_file(self) -> None:
+        """Write current live scores for all pairs to fxbot_scores.csv for the panel indicator."""
+        try:
+            import MetaTrader5 as mt5
+            info = mt5.terminal_info()
+            if info is None:
+                return
+            path = os.path.join(info.data_path, "MQL5", "Files", "fxbot_scores.csv")
+            session = SessionDetector.get_session_info(datetime.now(tz=pytz.utc))["primary_session"]
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("pair,score,direction,strategy,regime,session,updated\n")
+                for pair in PAIRS:
+                    d = self._pair_scores.get(pair, {})
+                    f.write(
+                        f"{pair},"
+                        f"{d.get('score', 0):.0f},"
+                        f"{d.get('direction','--')},"
+                        f"{d.get('strategy','scanning')},"
+                        f"{d.get('regime','?')},"
+                        f"{session},"
+                        f"{d.get('updated','--')}\n"
+                    )
         except Exception:
             pass
 
