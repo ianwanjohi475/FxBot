@@ -657,7 +657,18 @@ class TradingEngine:
             self.telegram.send_message("Weekly loss limit — paused until Monday")
 
     def _get_normal_spread(self, pair: str) -> float:
-        return config.get("backtesting.spread_pips", {}).get(pair, 2.0)
+        defaults = {
+            "US30_USD": 3.0,    # ~3 index points normal spread
+            "NAS100_USD": 2.0,  # ~2 index points
+            "XAU_USD": 0.35,    # ~3.5 pips gold
+            "GBP_JPY": 1.5,
+            "USD_JPY": 0.5,
+            "EUR_USD": 1.0,
+        }
+        cfg_val = config.get("backtesting.spread_pips", {}).get(pair)
+        if cfg_val is not None:
+            return float(cfg_val)
+        return defaults.get(pair, 2.0)
 
     def _get_atr(self, pair: str) -> float:
         from indicators.volatility import VolatilityIndicators

@@ -113,8 +113,10 @@ class LiveFeed:
     def _to_pips(self, spread: float, pair: str) -> float:
         if "JPY" in pair:
             return round(spread * 100, 3)
-        if "XAU" in pair:
+        if "XAU" in pair or "XAG" in pair:
             return round(spread * 10, 3)
+        if any(x in pair for x in ("US30", "NAS", "SPX", "DAX", "UK100", "GER")):
+            return round(spread, 3)   # indices: 1 pip = 1 index point
         return round(spread * 10000, 3)
 
     def get_price(self, pair: str) -> dict:
@@ -183,8 +185,10 @@ class MT5LiveFeed:
     def _to_pips(self, spread: float, pair: str) -> float:
         if "JPY" in pair:
             return round(spread * 100, 3)
-        if "XAU" in pair:
+        if "XAU" in pair or "XAG" in pair:
             return round(spread * 10, 3)
+        if any(x in pair for x in ("US30", "NAS", "SPX", "DAX", "UK100", "GER")):
+            return round(spread, 3)   # indices: 1 pip = 1 index point
         return round(spread * 10000, 3)
 
     def _poll_loop(self) -> None:
