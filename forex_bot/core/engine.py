@@ -831,6 +831,11 @@ class TradingEngine:
                 self._active_trade_direction.pop(trade.pair, None)
                 self._recently_opened.pop(trade.trade_id, None)
                 self.telegram.notify_trade_close(trade.trade_id, exit_price, "sl_tp_hit")
+                # Trigger immediate weight re-evaluation after every close
+                try:
+                    self.adaptive.update_weights()
+                except Exception:
+                    pass
                 logger.info(
                     f"[Engine] {trade.pair} {trade.trade_id} closed by MT5 SL/TP "
                     f"| exit={exit_price:.5f} pnl={pnl:+.2f}"
@@ -873,6 +878,107 @@ class TradingEngine:
                     self._recently_opened.pop(trade.trade_id, None)
                     self.telegram.notify_trade_close(trade.trade_id, current, "trailing_stop")
                     logger.info(f"[Engine] {pair} trailing stop closed | pnl={pnl:+.2f}")
+                    continue
+
+                # Market reversal detection — early exit before SL hit
+                if self._is_reversal_confirmed(trade, current, atr):
+                    balance = self._account.get("balance", 10000)
+                    result  = self.execution.close_trade(
+                        trade.trade_id, current, "reversal_detected", balance
+                    )
+                    pnl = result.get("pnl_usd", 0)
+                    if pnl > 0:
+                        self.drawdown.register_win()
+                    else:
+                        self.drawdown.register_loss()
+                    self.correlation.remove_trade(pair)
+                    self._active_trade_direction.pop(pair, None)
+                    self._recently_opened.pop(trade.trade_id, None)
+                    self.telegram.notify_trade_close(trade.trade_id, current, "reversal_detected")
+                    logger.info(
+                        f"[Engine] {pair} {trade.trade_id} closed — REVERSAL DETECTED "
+                        f"@ {current:.5f} pnl={pnl:+.2f}"
+                    )
+
+    def _is_reversal_confirmed(self, trade, current_price: float, atr: float) -> bool:
+        """
+        Detect a confirmed momentum reversal against an open position.
+        Requires 3 out of 4 signals flipping against direction AND price moving
+        at least 0.5×ATR against entry — prevents premature closes on noise.
+        Only active if trade has NOT yet hit breakeven (SL not moved to entry).
+        """
+        # Skip if SL already at breakeven — trailing stop handles it from here
+        if trade.sl_price == trade.entry_price:
+            return False
+        # Skip if not yet enough adverse movement to matter (< 0.3 ATR)
+        if atr == 0:
+            return False
+        direction = trade.direction
+        entry     = trade.entry_price
+        adverse_move = (entry - current_price) if direction == "BUY" else (current_price - entry)
+        if adverse_move < atr * 0.3:
+            return False   # still within normal noise range
+
+        try:
+            from indicators.trend import TrendIndicators
+            from indicators.momentum import MomentumIndicators
+            import pandas as pd
+
+            data = self._data_cache.get(trade.pair, {})
+            df = data.get("M15")
+            if df is None or df.empty:
+                df = data.get("H1")
+            if df is None or len(df) < 30:
+                return False
+
+            close = df["close"]
+            signals_against = 0
+
+            # 1. RSI crossed against position
+            rsi = MomentumIndicators.rsi(close, 14)
+            rsi_val = rsi.iloc[-1]
+            if direction == "BUY"  and rsi_val < 42:
+                signals_against += 1
+            elif direction == "SELL" and rsi_val > 58:
+                signals_against += 1
+
+            # 2. MACD histogram flipped against position
+            macd = TrendIndicators.macd(close)
+            hist = macd["histogram"].iloc[-1]
+            if direction == "BUY"  and hist < 0:
+                signals_against += 1
+            elif direction == "SELL" and hist > 0:
+                signals_against += 1
+
+            # 3. EMA9 crossed EMA21 against position
+            ema9  = TrendIndicators.ema(close, 9).iloc[-1]
+            ema21 = TrendIndicators.ema(close, 21).iloc[-1]
+            if direction == "BUY"  and ema9 < ema21:
+                signals_against += 1
+            elif direction == "SELL" and ema9 > ema21:
+                signals_against += 1
+
+            # 4. Last 3 candles all closed against position
+            last3 = df.tail(3)
+            candles_against = sum(
+                1 for _, c in last3.iterrows()
+                if (direction == "BUY"  and c["close"] < c["open"]) or
+                   (direction == "SELL" and c["close"] > c["open"])
+            )
+            if candles_against == 3:
+                signals_against += 1
+
+            confirmed = signals_against >= 3
+            if confirmed:
+                logger.warning(
+                    f"[Engine] REVERSAL CONFIRMED {trade.pair} {direction} "
+                    f"| {signals_against}/4 signals against | adverse={adverse_move*10000:.1f}p "
+                    f"| RSI={rsi_val:.1f} MACD_hist={hist:.5f} EMA9<21={'yes' if ema9<ema21 else 'no'} "
+                    f"red_candles={candles_against}/3"
+                )
+            return confirmed
+        except Exception:
+            return False
 
     # ══════════════════════════════════════════════════════════════════════════
     # Data management
