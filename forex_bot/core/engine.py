@@ -45,16 +45,19 @@ TIMEFRAMES  = ["M15", "H1", "H4", "D1"]
 CANDLE_COUNT = 300
 
 # ── Timing ────────────────────────────────────────────────────────────────────
-SCAN_INTERVAL            = 5     # seconds — frequent scoring for live dashboard
+SCAN_INTERVAL            = 15    # seconds — main loop cadence (was 5, throttled back)
 LIVE_SCORE_INTERVAL      = 2     # seconds — intra-candle momentum update thread
-DATA_REFRESH_INTERVAL    = 15    # seconds — how often to pull new OHLC candles
+DATA_REFRESH_INTERVAL    = 30    # seconds — how often to pull new OHLC candles
 NEWS_WRITE_INTERVAL      = 1800  # 30 min between news CSV writes
 
 # ── Risk / position limits ────────────────────────────────────────────────────
-MAX_OPEN_TRADES       = 2      # max concurrent positions on $100 account
-DANGER_WIDE_SPREAD_MULT = 3.0  # skip if spread > 3× normal
-FIXED_LOT_SIZE        = 0.03   # every trade uses exactly 0.03 lots
-MIN_RR_RATIO          = 1.5    # skip signal if TP1 < 1.5× SL distance
+MAX_OPEN_TRADES          = 2     # max concurrent positions across ALL pairs
+MAX_TRADES_PER_PAIR      = 1     # absolute hard limit: 1 trade per pair at any time
+DANGER_WIDE_SPREAD_MULT  = 3.0   # skip if spread > 3× normal
+FIXED_LOT_SIZE           = 0.03  # every trade uses exactly 0.03 lots
+MIN_RR_RATIO             = 1.5   # skip signal if TP1 < 1.5× SL distance
+TRADE_COOLDOWN_SECS      = 3600  # minimum seconds between trades on the same pair
+SYNC_GRACE_SECS          = 90    # seconds after opening before sync can close a trade
 
 # Timeframes we watch for candle-close events (most reactive → least)
 CANDLE_WATCH_TFS = ["M15", "H1", "H4"]
@@ -128,6 +131,13 @@ class TradingEngine:
         self._current_regime: dict  = {}
         # base scores from last full strategy analysis (live thread adjusts from here)
         self._base_scores:    dict  = {p: 0.0 for p in PAIRS}
+        # ── Trade guard state (in-memory, race-condition-free) ─────────────────
+        # pair → epoch-seconds when last trade was OPENED (for per-pair cooldown)
+        self._pair_last_trade_time: dict = {}
+        # internal trade_id → epoch-seconds when opened (for sync grace period)
+        self._recently_opened: dict = {}
+        # pair → direction of currently open trade (set when opened, cleared on close)
+        self._active_trade_direction: dict = {}
 
     # ══════════════════════════════════════════════════════════════════════════
     # Startup / shutdown
@@ -147,9 +157,10 @@ class TradingEngine:
 
         self._load_initial_data()
         self._update_account()
-        self._reconcile_db_on_startup()   # clear phantom trades before first cycle
+        self._reconcile_db_on_startup()     # clear phantom trades before first cycle
+        self._load_live_mt5_state()        # sync in-memory guards with real MT5 positions
         self.is_running = True
-        self._start_live_score_thread()   # 2-second intra-candle momentum updates
+        self._start_live_score_thread()    # 2-second intra-candle momentum updates
 
         self.telegram.send_message("FxBot started | pairs: " + ", ".join(PAIRS))
         logger.info("[Engine] Bot is live. Starting real-time main loop.")
@@ -184,6 +195,9 @@ class TradingEngine:
                             "exit_time": datetime.now(tz=pytz.utc),
                             "pnl_usd": 0.0,
                         })
+                        # Clear in-memory guards so the pair can trade again
+                        self._active_trade_direction.pop(t.pair, None)
+                        self._recently_opened.pop(t.trade_id, None)
                         closed += 1
                     except Exception:
                         pass
@@ -193,6 +207,29 @@ class TradingEngine:
         except Exception as e:
             logger.debug(f"[Engine] Reconcile skipped: {e}")
             return 0
+
+    def _load_live_mt5_state(self) -> None:
+        """Read actual open MT5 positions on startup and prime in-memory guards.
+        Prevents re-opening pairs that are already live in MT5."""
+        if not isinstance(self.broker, MT5Broker):
+            return
+        try:
+            mt5_positions = self.broker.get_open_trades()
+            if not mt5_positions:
+                return
+            from data.historical import OANDA_TO_MT5
+            mt5_to_oanda = {v: k for k, v in OANDA_TO_MT5.items()}
+            for pos in mt5_positions:
+                symbol = pos.get("instrument", "")
+                oanda_pair = mt5_to_oanda.get(symbol, symbol)
+                direction  = "BUY" if int(pos.get("currentUnits", 1)) > 0 else "SELL"
+                self._active_trade_direction[oanda_pair] = direction
+                logger.info(
+                    f"[Engine] Loaded live MT5 position: {oanda_pair} {direction} — "
+                    f"cooldown guard set"
+                )
+        except Exception as e:
+            logger.debug(f"[Engine] MT5 state load skipped: {e}")
 
     def _deploy_mt5_ea_files(self) -> None:
         """Auto-copy and auto-compile latest EA/indicator files into MT5 on every startup."""
@@ -585,16 +622,50 @@ class TradingEngine:
             self._mark_pair_status(pair, "no_data")
             return
 
-        # Soft blocks: max_trades / in_trade → still score for live dashboard, skip execution
-        open_trades = self.db.get_open_trades()
+        # ── Hard execution guards (checked in priority order) ─────────────────
         can_execute = True
         exec_block  = None
-        if len(open_trades) >= MAX_OPEN_TRADES:
+        now_ts      = time.time()
+
+        # 1. In-memory cooldown: minimum gap between trades on the same pair
+        last_trade_ts = self._pair_last_trade_time.get(pair, 0)
+        if now_ts - last_trade_ts < TRADE_COOLDOWN_SECS:
+            remaining = int(TRADE_COOLDOWN_SECS - (now_ts - last_trade_ts))
             can_execute = False
-            exec_block  = "max_trades"
-        elif any(t.pair == pair for t in open_trades):
+            exec_block  = f"cooldown({remaining//60}m)"
+
+        # 2. In-memory direction guard: already have a trade on this pair
+        elif pair in self._active_trade_direction:
             can_execute = False
             exec_block  = "in_trade"
+
+        # 3. DB count guard: total open positions across all pairs
+        else:
+            open_trades = self.db.get_open_trades()
+            if len(open_trades) >= MAX_OPEN_TRADES:
+                can_execute = False
+                exec_block  = "max_trades"
+            elif any(t.pair == pair for t in open_trades):
+                # DB shows pair open even though in-memory doesn't — sync guard
+                can_execute = False
+                exec_block  = "in_trade"
+
+        # 4. Direct MT5 check before any execution (failsafe against DB lag)
+        if can_execute and isinstance(self.broker, MT5Broker):
+            try:
+                import MetaTrader5 as mt5
+                symbol = OANDA_TO_MT5.get(pair, pair.replace("_", ""))
+                live_pos = mt5.positions_get(symbol=symbol) or []
+                if live_pos:
+                    can_execute = False
+                    exec_block  = "mt5_position_exists"
+                    # Sync in-memory state with what MT5 actually has
+                    self._active_trade_direction[pair] = (
+                        "BUY" if live_pos[0].type == 0 else "SELL"
+                    )
+                    logger.debug(f"[Engine] {pair} — MT5 position found, blocking new trade")
+            except Exception:
+                pass
 
         session_info = SessionDetector.get_session_info(now)
         session      = session_info["primary_session"]
@@ -636,19 +707,28 @@ class TradingEngine:
             self._write_chart_signal(signal, score)   # always draw — even if not traded
 
             if not can_execute:
-                continue  # soft-blocked: still score + draw, but no order
+                continue  # blocked: still score + draw, but no order
 
             if not self.confluence.is_tradeable(score):
                 continue
 
-            # Minimum R:R gate
+            # ── Minimum R:R gate ─────────────────────────────────────────────
             risk_dist   = abs(signal.entry_price - signal.sl_price)
             reward_dist = abs(signal.tp1_price   - signal.entry_price)
-            if risk_dist == 0 or (reward_dist / risk_dist) < MIN_RR_RATIO:
-                logger.debug(f"[Engine] {pair} RR={reward_dist/max(risk_dist,1e-9):.2f} < {MIN_RR_RATIO} — skip")
+            if risk_dist == 0:
+                logger.debug(f"[Engine] {pair} zero risk_dist — skip")
+                continue
+            rr = reward_dist / risk_dist
+            if rr < MIN_RR_RATIO:
+                logger.info(f"[Engine] {pair} RR={rr:.2f} < {MIN_RR_RATIO} — skip")
                 continue
 
-            # Correlation guard
+            # ── SL must be non-zero (hard rule) ──────────────────────────────
+            if signal.sl_price == 0 or signal.sl_price == signal.entry_price:
+                logger.warning(f"[Engine] {pair} no valid SL — trade rejected")
+                continue
+
+            # ── Correlation guard ─────────────────────────────────────────────
             allowed, corr_reason = self.correlation.can_open_trade(pair, signal.direction)
             if not allowed:
                 logger.info(f"[Engine] {pair} correlation block: {corr_reason}")
@@ -656,6 +736,18 @@ class TradingEngine:
 
             lot_size = FIXED_LOT_SIZE
             risk_usd = round(lot_size * risk_dist * 10000 * 10, 2)
+
+            # ── Pre-execution decision log (required for every trade) ─────────
+            logger.info(
+                f"[Engine] SIGNAL CONFIRMED | {pair} {signal.direction} "
+                f"| Strategy: {signal.strategy_name} "
+                f"| Score: {score:.1f}/100 "
+                f"| Regime: {regime} | Session: {session} "
+                f"| Entry: {signal.entry_price:.5f} "
+                f"| SL: {signal.sl_price:.5f} ({risk_dist*10000:.1f}p) "
+                f"| TP1: {signal.tp1_price:.5f} (RR={rr:.2f}) "
+                f"| Lot: {lot_size} Risk: ${risk_usd:.2f}"
+            )
 
             trade_id = self.execution.open_trade(
                 signal=signal,
@@ -667,6 +759,11 @@ class TradingEngine:
             )
 
             if trade_id:
+                # ── Update in-memory guards immediately ───────────────────────
+                self._active_trade_direction[pair] = signal.direction
+                self._pair_last_trade_time[pair]   = time.time()
+                self._recently_opened[trade_id]    = time.time()
+                # ─────────────────────────────────────────────────────────────
                 self.correlation.add_trade(pair, signal.direction)
                 self.telegram.notify_trade_open(signal, trade_id, lot_size, risk_usd)
                 logger.info(
@@ -674,7 +771,7 @@ class TradingEngine:
                     f"@ {signal.entry_price} SL={signal.sl_price} TP1={signal.tp1_price} "
                     f"lot={lot_size} score={score:.1f} strat={signal.strategy_name}"
                 )
-                break   # one trade per pair per cycle
+                break   # ONE trade per pair per analysis cycle — hard stop
 
         # Always update live score dashboard
         self._base_scores[pair] = best_score   # live thread adjusts from this base
@@ -692,7 +789,9 @@ class TradingEngine:
     # ══════════════════════════════════════════════════════════════════════════
 
     def _sync_mt5_positions(self) -> None:
-        """Detect positions MT5 closed (SL/TP hit) and mark them in our DB."""
+        """Detect positions MT5 closed (SL/TP hit) and mark them in our DB.
+        Grace period: never closes a trade opened less than SYNC_GRACE_SECS ago,
+        preventing race conditions where MT5's positions_get() lags behind fills."""
         if not isinstance(self.broker, MT5Broker):
             return
         try:
@@ -701,10 +800,22 @@ class TradingEngine:
                 return
             live_tickets = {t["id"] for t in self.broker.get_open_trades()}
             balance = self._account.get("balance", 10000)
+            now_ts = time.time()
             for trade in open_db:
                 ticket = trade.oanda_order_id
-                if not ticket or ticket in live_tickets:
+                if not ticket:
                     continue
+                if ticket in live_tickets:
+                    continue
+                # Grace period: skip if this trade was opened very recently
+                open_ts = self._recently_opened.get(trade.trade_id, 0)
+                if now_ts - open_ts < SYNC_GRACE_SECS:
+                    logger.debug(
+                        f"[Engine] Sync skipping {trade.trade_id} — opened "
+                        f"{int(now_ts - open_ts)}s ago (grace period active)"
+                    )
+                    continue
+                # MT5 has closed this position (SL/TP hit)
                 price_info = self.live_feed.get_price(trade.pair)
                 exit_price = price_info.get("mid", trade.entry_price) if price_info else trade.entry_price
                 result = self.execution.close_trade(
@@ -716,10 +827,13 @@ class TradingEngine:
                 else:
                     self.drawdown.register_loss()
                 self.correlation.remove_trade(trade.pair)
+                # Clear in-memory trade guards for this pair
+                self._active_trade_direction.pop(trade.pair, None)
+                self._recently_opened.pop(trade.trade_id, None)
                 self.telegram.notify_trade_close(trade.trade_id, exit_price, "sl_tp_hit")
                 logger.info(
-                    f"[Engine] {trade.pair} {trade.trade_id} closed by MT5 "
-                    f"| exit={exit_price} pnl={pnl:+.2f}"
+                    f"[Engine] {trade.pair} {trade.trade_id} closed by MT5 SL/TP "
+                    f"| exit={exit_price:.5f} pnl={pnl:+.2f}"
                 )
         except Exception as e:
             logger.debug(f"[Engine] MT5 sync error: {e}")
@@ -755,6 +869,8 @@ class TradingEngine:
                     else:
                         self.drawdown.register_loss()
                     self.correlation.remove_trade(pair)
+                    self._active_trade_direction.pop(pair, None)
+                    self._recently_opened.pop(trade.trade_id, None)
                     self.telegram.notify_trade_close(trade.trade_id, current, "trailing_stop")
                     logger.info(f"[Engine] {pair} trailing stop closed | pnl={pnl:+.2f}")
 
