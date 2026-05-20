@@ -138,6 +138,13 @@ class TradingEngine:
         self._recently_opened: dict = {}
         # pair → direction of currently open trade (set when opened, cleared on close)
         self._active_trade_direction: dict = {}
+        # ── Real-time monitoring state ────────────────────────────────────────
+        # pair → last mid price seen (for momentum spike detection)
+        self._last_tick_price: dict = {}
+        # pair → epoch when last big move was flagged (throttle urgent re-analysis)
+        self._last_urgent_ts: dict = {}
+        # current trading session (Asia/London/NewYork/Off)
+        self._current_session: str = ""
 
     # ══════════════════════════════════════════════════════════════════════════
     # Startup / shutdown
@@ -161,6 +168,8 @@ class TradingEngine:
         self._load_live_mt5_state()        # sync in-memory guards with real MT5 positions
         self.is_running = True
         self._start_live_score_thread()    # 2-second intra-candle momentum updates
+        self._start_candle_watcher()       # 500ms dedicated candle-close detector
+        self._start_session_watcher()      # detects London/NY/Asia session transitions
 
         self.telegram.send_message("FxBot started | pairs: " + ", ".join(PAIRS))
         logger.info("[Engine] Bot is live. Starting real-time main loop.")
@@ -293,26 +302,18 @@ class TradingEngine:
                     self._reconcile_db(reason="reconcile_periodic")
                     self._last_reconcile = now_ts
 
-                # ── Candle-close detection → immediate analysis ───────────────
-                candle_pairs: Set[str] = set()
-                for pair in PAIRS:
-                    for tf in CANDLE_WATCH_TFS:
-                        if self._candle_just_closed(pair, tf):
-                            candle_pairs.add(pair)
-                            logger.info(f"[Engine] {pair} {tf} candle closed — analysing now")
-                            break  # one TF trigger per pair per cycle
-
-                # ── Urgent pairs flagged by tick handler ──────────────────────
+                # ── Urgent pairs: candle closes + tick spikes + session opens ─
+                # (CandleWatcher thread populates _urgent_pairs every 500ms)
                 with self._trade_lock:
                     urgent = self._urgent_pairs.copy()
                     self._urgent_pairs.clear()
-                all_priority = candle_pairs | urgent
 
-                # Priority pairs first, then the rest
-                for pair in all_priority:
+                # Priority pairs first (candle close / momentum spike / session open)
+                for pair in urgent:
                     self._safe_analyze(pair)
+                # Then regular fallback scan for all remaining pairs
                 for pair in PAIRS:
-                    if pair not in all_priority:
+                    if pair not in urgent:
                         self._safe_analyze(pair)
 
                 self.adaptive.update_weights()
@@ -347,7 +348,8 @@ class TradingEngine:
         """
         Fires every ~1 second per pair.
         Fast path only — no heavy strategy work here.
-        Detects TP1 cross and breakeven move in real time.
+        Handles: TP1/TP2/TP3 crosses, breakeven, trailing activation,
+        and momentum-spike urgent re-analysis flagging for ALL pairs.
         """
         if not self.is_running or self.execution is None:
             return
@@ -356,46 +358,100 @@ class TradingEngine:
             return
 
         try:
+            # ── Momentum spike detection (all pairs, traded or not) ───────────
+            atr = self._get_atr(pair)
+            prev_price = self._last_tick_price.get(pair, current)
+            self._last_tick_price[pair] = current
+            if atr > 0:
+                tick_move = abs(current - prev_price)
+                now_ts = time.time()
+                # Spike: single-tick move > 0.3×ATR → flag for urgent re-analysis
+                # Throttle: max once per 60s per pair to avoid spam
+                if (tick_move > atr * 0.3 and
+                        now_ts - self._last_urgent_ts.get(pair, 0) > 60):
+                    with self._trade_lock:
+                        self._urgent_pairs.add(pair)
+                    self._last_urgent_ts[pair] = now_ts
+                    logger.debug(
+                        f"[Tick] {pair} momentum spike {tick_move*10000:.1f}p "
+                        f"({tick_move/atr:.2f}×ATR) — urgent re-analysis queued"
+                    )
+
             open_trades = self.db.get_open_trades()
             for trade in open_trades:
                 if trade.pair != pair:
                     continue
 
                 direction = trade.direction
-                tp1       = trade.tp1_price
                 entry     = trade.entry_price
                 sl        = trade.sl_price
+                tp1       = trade.tp1_price
+                tp2       = trade.tp2_price
+                tp3       = trade.tp3_price
+
+                is_buy = direction == "BUY"
 
                 # ── TP1 hit → move SL to breakeven + start trailing ───────────
                 tp1_hit = (
-                    tp1 and
-                    sl != entry and          # not already at breakeven
+                    tp1 and sl != entry and
                     not self.trailing.active_trails.get(trade.trade_id) and
-                    (
-                        (direction == "BUY"  and current >= tp1) or
-                        (direction == "SELL" and current <= tp1)
-                    )
+                    ((is_buy and current >= tp1) or (not is_buy and current <= tp1))
                 )
                 if tp1_hit:
                     with self._trade_lock:
                         self.execution.modify_sl(trade.trade_id, entry)
                         self.trailing.activate(
                             trade.trade_id, entry, direction,
-                            atr=self._get_atr(pair),
-                            activation_price=current,
+                            atr=atr, activation_price=current,
                         )
                     logger.info(
-                        f"[Engine] {pair} TP1 reached @ {current:.5f} — "
-                        f"SL moved to breakeven {entry:.5f}"
+                        f"[Engine] {pair} TP1 @ {current:.5f} — "
+                        f"SL → breakeven {entry:.5f}, trailing activated"
                     )
+                    self.telegram.send_message(
+                        f"{pair} TP1 hit {current:.5f} — SL at breakeven, trailing active"
+                    )
+                    continue
 
-                # ── Flag pair for priority analysis on big price move ─────────
-                atr = self._get_atr(pair)
-                if atr > 0:
-                    move = abs(current - entry)
-                    if move > atr * 0.5:   # half ATR move = significant candle body
-                        with self._trade_lock:
-                            self._urgent_pairs.add(pair)
+                # ── TP2 hit → log milestone, tighten SL to TP1 ───────────────
+                tp2_hit = (
+                    tp2 and sl != tp1 and sl == entry and   # already at breakeven
+                    ((is_buy and current >= tp2) or (not is_buy and current <= tp2))
+                )
+                if tp2_hit and tp1:
+                    with self._trade_lock:
+                        self.execution.modify_sl(trade.trade_id, tp1)
+                    logger.info(
+                        f"[Engine] {pair} TP2 @ {current:.5f} — "
+                        f"SL locked to TP1 {tp1:.5f}"
+                    )
+                    self.telegram.send_message(
+                        f"{pair} TP2 hit {current:.5f} — SL locked at TP1 {tp1:.5f}"
+                    )
+                    continue
+
+                # ── TP3 hit → close full position, take profit ────────────────
+                tp3_hit = (
+                    tp3 and
+                    ((is_buy and current >= tp3) or (not is_buy and current <= tp3))
+                )
+                if tp3_hit:
+                    with self._trade_lock:
+                        balance = self._account.get("balance", 10000)
+                        result  = self.execution.close_trade(
+                            trade.trade_id, current, "tp3_hit", balance
+                        )
+                        pnl = result.get("pnl_usd", 0)
+                        self.drawdown.register_win()
+                        self.correlation.remove_trade(pair)
+                        self._active_trade_direction.pop(pair, None)
+                        self._recently_opened.pop(trade.trade_id, None)
+                        self.adaptive.update_weights()
+                    self.telegram.notify_trade_close(trade.trade_id, current, "tp3_hit")
+                    logger.info(
+                        f"[Engine] {pair} TP3 hit @ {current:.5f} — "
+                        f"full close | pnl={pnl:+.2f}"
+                    )
 
         except Exception:
             pass   # tick handler must never crash
@@ -414,6 +470,63 @@ class TradingEngine:
                     pass
                 time.sleep(LIVE_SCORE_INTERVAL)
         t = threading.Thread(target=_run, daemon=True, name="LiveScoreThread")
+        t.start()
+
+    def _start_candle_watcher(self):
+        """
+        Dedicated thread that polls for candle closes every 500ms.
+        Much more precise than relying on the 15s main loop — candle close triggers
+        immediate strategy analysis so we never miss a confirmed signal.
+        """
+        def _run():
+            while self.is_running:
+                try:
+                    for pair in PAIRS:
+                        for tf in CANDLE_WATCH_TFS:
+                            if self._candle_just_closed(pair, tf):
+                                with self._trade_lock:
+                                    self._urgent_pairs.add(pair)
+                                logger.info(
+                                    f"[CandleWatcher] {pair} {tf} candle closed "
+                                    f"— queued for immediate analysis"
+                                )
+                                break  # one TF per pair per cycle
+                except Exception:
+                    pass
+                time.sleep(0.5)
+        t = threading.Thread(target=_run, daemon=True, name="CandleWatcher")
+        t.start()
+
+    def _start_session_watcher(self):
+        """
+        Watches for trading session transitions (Asia→London→NY).
+        When a new session opens, all pairs are flagged for immediate re-analysis
+        since liquidity and volatility change dramatically at session opens.
+        """
+        def _run():
+            while self.is_running:
+                try:
+                    now  = datetime.now(tz=pytz.utc)
+                    info = SessionDetector.get_session_info(now)
+                    new_session = info.get("primary_session", "")
+                    if new_session != self._current_session and new_session:
+                        if self._current_session:  # not the first read
+                            logger.info(
+                                f"[SessionWatcher] Session changed: "
+                                f"{self._current_session} → {new_session} "
+                                f"— all pairs queued for re-analysis"
+                            )
+                            self.telegram.send_message(
+                                f"Session open: {new_session.upper()} — scanning all pairs"
+                            )
+                            with self._trade_lock:
+                                for pair in PAIRS:
+                                    self._urgent_pairs.add(pair)
+                        self._current_session = new_session
+                except Exception:
+                    pass
+                time.sleep(30)  # check every 30s — session boundaries are minute-level
+        t = threading.Thread(target=_run, daemon=True, name="SessionWatcher")
         t.start()
 
     def _tick_live_scores(self):
