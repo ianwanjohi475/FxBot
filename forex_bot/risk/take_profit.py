@@ -7,16 +7,32 @@ logger = get_logger(__name__)
 
 class TakeProfitCalculator:
 
+    # Volatile pairs need wider TP targets because price makes larger swings.
+    # Standard pairs use 1:1, 2:1, 3:1.  Volatile pairs use 1.5:1, 3:1, 5:1.
+    PAIR_RR_LEVELS: dict = {
+        "XAU_USD":  (1.5, 3.0, 5.0),
+        "US30_USD": (1.5, 2.5, 4.0),
+        "GBP_JPY":  (1.2, 2.2, 3.5),
+        "USD_JPY":  (1.0, 2.0, 3.0),
+        "EUR_USD":  (1.0, 2.0, 3.0),
+    }
+
     def calculate_tp_levels(
         self,
         entry: float,
         sl: float,
         direction: str,
         pair: str = "EUR_USD",
-        rr_tp1: float = 1.0,
-        rr_tp2: float = 2.0,
-        rr_tp3: float = 3.0,
+        rr_tp1: float = None,
+        rr_tp2: float = None,
+        rr_tp3: float = None,
     ) -> Tuple[float, float, float]:
+        # Use pair-specific RR levels if caller didn't override
+        default_rr = self.PAIR_RR_LEVELS.get(pair, (1.0, 2.0, 3.0))
+        if rr_tp1 is None: rr_tp1 = default_rr[0]
+        if rr_tp2 is None: rr_tp2 = default_rr[1]
+        if rr_tp3 is None: rr_tp3 = default_rr[2]
+
         risk = abs(entry - sl)
         if direction == "BUY":
             tp1 = entry + risk * rr_tp1

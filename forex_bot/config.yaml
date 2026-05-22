@@ -31,58 +31,38 @@ mt5:
   enabled: false
 
 # -----------------------------------------------------------------------------
-# Trading Pairs
+# Trading Pairs  (must match engine.py PAIRS constant exactly)
 # -----------------------------------------------------------------------------
 pairs:
   - EUR_USD
-  - GBP_USD
   - USD_JPY
-  - AUD_USD
-  - USD_CHF
-  - NZD_USD
-  - USD_CAD
   - XAU_USD
+  - US30_USD
   - GBP_JPY
-  - EUR_JPY
 
-# Pip sizes per pair (number of decimal places for pip calculation)
+# Pip sizes per pair
 pip_location:
-  EUR_USD: 4
-  GBP_USD: 4
-  USD_JPY: 2
-  AUD_USD: 4
-  USD_CHF: 4
-  NZD_USD: 4
-  USD_CAD: 4
-  XAU_USD: 2
-  GBP_JPY: 2
-  EUR_JPY: 2
+  EUR_USD:  4
+  USD_JPY:  2
+  XAU_USD:  2     # gold: 1 pip = $0.01
+  US30_USD: 0     # Dow: 1 pip = 1 index point (whole numbers)
+  GBP_JPY:  2
 
 # Tick sizes per pair
 tick_size:
-  EUR_USD: 0.00001
-  GBP_USD: 0.00001
-  USD_JPY: 0.001
-  AUD_USD: 0.00001
-  USD_CHF: 0.00001
-  NZD_USD: 0.00001
-  USD_CAD: 0.00001
-  XAU_USD: 0.01
-  GBP_JPY: 0.001
-  EUR_JPY: 0.001
+  EUR_USD:  0.00001
+  USD_JPY:  0.001
+  XAU_USD:  0.01
+  US30_USD: 1.0
+  GBP_JPY:  0.001
 
-# Minimum trade sizes (units)
+# Minimum trade sizes (units / lots)
 min_trade_units:
-  EUR_USD: 1000
-  GBP_USD: 1000
-  USD_JPY: 1000
-  AUD_USD: 1000
-  USD_CHF: 1000
-  NZD_USD: 1000
-  USD_CAD: 1000
-  XAU_USD: 1
-  GBP_JPY: 1000
-  EUR_JPY: 1000
+  EUR_USD:  1000
+  USD_JPY:  1000
+  XAU_USD:  1
+  US30_USD: 1
+  GBP_JPY:  1000
 
 # -----------------------------------------------------------------------------
 # Timeframes
@@ -111,27 +91,44 @@ entry_timeframe: M15
 # -----------------------------------------------------------------------------
 risk:
   risk_per_trade: 0.01          # 1% of account balance per trade
-  max_open_trades: 5            # maximum simultaneous open positions
+  max_open_trades: 1            # ONE trade at a time — prevents simultaneous entries
   max_daily_loss: 0.05          # 5% max drawdown per day (closes all trades)
   max_weekly_loss: 0.10         # 10% max drawdown per week
-  min_confluence_score: 65      # minimum score (0-100) to open a trade
-  max_correlated_trades: 2      # max trades in correlated pairs simultaneously
+  min_confluence_score: 60      # default minimum score (0-100) to open a trade
+  max_correlated_trades: 1      # max trades in correlated pairs simultaneously
   max_single_pair_trades: 1     # max trades on one pair at once
-  max_leverage: 30              # maximum leverage ratio
+  max_leverage: 20              # maximum leverage (reduced from 30)
   trailing_stop_activation: 1.5 # activate trailing stop after 1.5x ATR profit
   trailing_stop_distance: 1.0   # trail by 1.0x ATR
   breakeven_activation: 1.0     # move SL to breakeven after 1.0x ATR profit
   partial_close_ratio: 0.5      # close 50% at first TP
   use_atr_sl: true              # use ATR-based stop loss
-  atr_sl_multiplier: 1.5        # SL = 1.5 * ATR
+  atr_sl_multiplier: 1.5        # SL = 1.5 * ATR (default pairs)
   atr_tp_multiplier: 3.0        # TP = 3.0 * ATR (2:1 RR minimum)
   min_rr_ratio: 1.5             # minimum acceptable risk/reward ratio
 
+# ── Volatile pair overrides (XAU_USD and US30_USD) ──────────────────────────
+# These instruments have large point moves and require stricter controls.
+volatile_pair_risk:
+  XAU_USD:
+    risk_per_trade: 0.005       # 0.5% risk (half normal)
+    min_confluence_score: 75    # must be very high confidence
+    max_lot: 0.03
+    atr_sl_multiplier: 2.0      # wider SL to avoid gold noise stops
+    min_rr_ratio: 1.5
+  US30_USD:
+    risk_per_trade: 0.005       # 0.5% risk
+    min_confluence_score: 75    # high bar — Dow moves 200+ pts on news
+    max_lot: 0.02
+    atr_sl_multiplier: 2.5      # very wide SL for index noise
+    min_rr_ratio: 1.5
+
 # Correlation pairs (avoid trading both simultaneously)
 correlated_pairs:
-  group_1: [EUR_USD, GBP_USD, AUD_USD, NZD_USD]
-  group_2: [USD_JPY, USD_CHF, USD_CAD]
-  group_3: [EUR_JPY, GBP_JPY]
+  group_1: [EUR_USD, GBP_USD]
+  group_2: [USD_JPY, USD_CHF]
+  group_3: [GBP_JPY, EUR_JPY]
+  group_4: [XAU_USD, US30_USD]  # both react to USD/risk — max 1 open at a time
 
 # -----------------------------------------------------------------------------
 # Strategy Weights
@@ -326,18 +323,13 @@ session_times_est:
   ny_open: "07:00"
   ny_close: "17:00"
 
-# Preferred trading sessions per pair
+# Preferred trading sessions per pair (only active pairs)
 pair_sessions:
-  EUR_USD: [london, new_york, london_new_york]
-  GBP_USD: [london, new_york, london_new_york]
-  USD_JPY: [tokyo, london, tokyo_london]
-  AUD_USD: [sydney, tokyo]
-  USD_CHF: [london, new_york]
-  NZD_USD: [sydney, tokyo]
-  USD_CAD: [new_york]
-  XAU_USD: [london, new_york, london_new_york]
-  GBP_JPY: [london, tokyo_london]
-  EUR_JPY: [london, tokyo_london]
+  EUR_USD:  [london, new_york, london_new_york]
+  USD_JPY:  [tokyo, london, tokyo_london]
+  XAU_USD:  [london, new_york, london_new_york]
+  US30_USD: [new_york]                            # Dow trades best in NY session
+  GBP_JPY:  [london, tokyo_london]
 
 # Avoid trading during these UTC hours (low liquidity)
 low_liquidity_hours: ["21:00", "22:00", "23:00", "00:00"]
@@ -444,16 +436,11 @@ backtesting:
 
   # Spread simulation (pips)
   spread_pips:
-    EUR_USD: 1.5
-    GBP_USD: 2.0
-    USD_JPY: 1.5
-    AUD_USD: 2.0
-    USD_CHF: 2.0
-    NZD_USD: 2.5
-    USD_CAD: 2.5
-    XAU_USD: 30.0
-    GBP_JPY: 3.0
-    EUR_JPY: 2.0
+    EUR_USD:  1.5
+    USD_JPY:  1.5
+    XAU_USD:  30.0   # ~$0.30 spread on gold
+    US30_USD: 3.0    # ~3 index points on Dow
+    GBP_JPY:  3.0
 
   # Slippage simulation (pips)
   slippage_pips: 0.5

@@ -45,16 +45,37 @@ class StopLossCalculator:
         sl = entry - offset if direction == "BUY" else entry + offset
         return round(sl, 5)
 
+    # Pair-specific SL bounds (pips). Volatile pairs need wider minimums to
+    # avoid getting stopped out by normal noise before the move develops.
+    PAIR_SL_BOUNDS: dict = {
+        "XAU_USD":  {"min": 15,  "max": 150},   # gold: ~$0.15–$1.50 per pip on 0.03 lots
+        "US30_USD": {"min": 20,  "max": 300},   # Dow: 20–300 index points
+        "GBP_JPY":  {"min": 10,  "max": 150},   # volatile cross
+        "USD_JPY":  {"min":  5,  "max": 100},
+        "EUR_USD":  {"min":  5,  "max": 100},
+    }
+
     def validate_sl(self, entry: float, sl: float, direction: str,
-                    min_pips: float = 3, max_pips: float = 200,
+                    min_pips: float = 5, max_pips: float = 150,
                     pair: str = "EUR_USD") -> float:
+        # Use pair-specific bounds when available
+        bounds = self.PAIR_SL_BOUNDS.get(pair, {})
+        min_pips = bounds.get("min", min_pips)
+        max_pips = bounds.get("max", max_pips)
+
         pip = self._pip_size(pair)
         distance_pips = abs(entry - sl) / pip
         if distance_pips < min_pips:
-            logger.debug(f"SL too tight ({distance_pips:.1f} pips), adjusting to {min_pips}")
+            logger.debug(
+                f"[SL] {pair} SL too tight ({distance_pips:.1f}p < {min_pips}p), "
+                f"adjusting to minimum"
+            )
             return self.fixed_pip_sl(entry, direction, min_pips, pair)
         if distance_pips > max_pips:
-            logger.debug(f"SL too wide ({distance_pips:.1f} pips), capping at {max_pips}")
+            logger.debug(
+                f"[SL] {pair} SL too wide ({distance_pips:.1f}p > {max_pips}p), "
+                f"capping at maximum"
+            )
             return self.fixed_pip_sl(entry, direction, max_pips, pair)
         return round(sl, 5)
 

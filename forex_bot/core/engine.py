@@ -51,13 +51,18 @@ DATA_REFRESH_INTERVAL    = 30    # seconds — how often to pull new OHLC candle
 NEWS_WRITE_INTERVAL      = 1800  # 30 min between news CSV writes
 
 # ── Risk / position limits ────────────────────────────────────────────────────
-MAX_OPEN_TRADES          = 2     # max concurrent positions across ALL pairs
+MAX_OPEN_TRADES          = 1     # ONE trade at a time — prevents simultaneous multi-pair entries
 MAX_TRADES_PER_PAIR      = 1     # absolute hard limit: 1 trade per pair at any time
 DANGER_WIDE_SPREAD_MULT  = 3.0   # skip if spread > 3× normal
-FIXED_LOT_SIZE           = 0.03  # every trade uses exactly 0.03 lots
+FIXED_LOT_SIZE           = 0.03  # default lot size (volatile pairs may override)
 MIN_RR_RATIO             = 1.5   # skip signal if TP1 < 1.5× SL distance
 TRADE_COOLDOWN_SECS      = 3600  # minimum seconds between trades on the same pair
 SYNC_GRACE_SECS          = 90    # seconds after opening before sync can close a trade
+
+# ── Volatile pair rules ───────────────────────────────────────────────────────
+VOLATILE_PAIRS           = {"XAU_USD", "US30_USD"}
+VOLATILE_LOT_SIZES       = {"XAU_USD": 0.03, "US30_USD": 0.02}  # per-pair lot caps
+VOLATILE_MIN_SCORE       = 75    # volatile pairs require stronger confluence than default 60
 
 # Timeframes we watch for candle-close events (most reactive → least)
 CANDLE_WATCH_TFS = ["M15", "H1", "H4"]
@@ -145,6 +150,8 @@ class TradingEngine:
         self._last_urgent_ts: dict = {}
         # current trading session (Asia/London/NewYork/Off)
         self._current_session: str = ""
+        # pairs where a candle FULLY CLOSED this cycle — trade entry only allowed here
+        self._candle_confirmed_pairs: Set[str] = set()
 
     # ══════════════════════════════════════════════════════════════════════════
     # Startup / shutdown
@@ -475,8 +482,8 @@ class TradingEngine:
     def _start_candle_watcher(self):
         """
         Dedicated thread that polls for candle closes every 500ms.
-        Much more precise than relying on the 15s main loop — candle close triggers
-        immediate strategy analysis so we never miss a confirmed signal.
+        Candle close is the ONLY trigger that enables trade execution — entries
+        are never allowed mid-candle (prevents chasing price).
         """
         def _run():
             while self.is_running:
@@ -486,9 +493,10 @@ class TradingEngine:
                             if self._candle_just_closed(pair, tf):
                                 with self._trade_lock:
                                     self._urgent_pairs.add(pair)
+                                    self._candle_confirmed_pairs.add(pair)
                                 logger.info(
                                     f"[CandleWatcher] {pair} {tf} candle closed "
-                                    f"— queued for immediate analysis"
+                                    f"— candle confirmed, queued for analysis"
                                 )
                                 break  # one TF per pair per cycle
                 except Exception:
@@ -736,34 +744,51 @@ class TradingEngine:
             return
 
         # ── Hard execution guards (checked in priority order) ─────────────────
+        # IMPORTANT: all guard checks use in-memory state (not DB) to avoid race
+        # conditions where two pairs pass the DB guard in the same scan cycle.
         can_execute = True
         exec_block  = None
         now_ts      = time.time()
 
-        # 1. In-memory cooldown: minimum gap between trades on the same pair
-        last_trade_ts = self._pair_last_trade_time.get(pair, 0)
-        if now_ts - last_trade_ts < TRADE_COOLDOWN_SECS:
-            remaining = int(TRADE_COOLDOWN_SECS - (now_ts - last_trade_ts))
+        # 0. Candle confirmation gate — only enter on a confirmed candle close.
+        #    Prevents mid-candle entries that chase price on partial bars.
+        with self._trade_lock:
+            candle_confirmed = pair in self._candle_confirmed_pairs
+            self._candle_confirmed_pairs.discard(pair)  # consume the confirmation
+
+        if not candle_confirmed:
             can_execute = False
-            exec_block  = f"cooldown({remaining//60}m)"
+            exec_block  = "no_candle_close"
+
+        # 1. In-memory cooldown: minimum gap between trades on the same pair
+        if can_execute:
+            last_trade_ts = self._pair_last_trade_time.get(pair, 0)
+            if now_ts - last_trade_ts < TRADE_COOLDOWN_SECS:
+                remaining = int(TRADE_COOLDOWN_SECS - (now_ts - last_trade_ts))
+                can_execute = False
+                exec_block  = f"cooldown({remaining//60}m)"
 
         # 2. In-memory direction guard: already have a trade on this pair
-        elif pair in self._active_trade_direction:
+        if can_execute and pair in self._active_trade_direction:
             can_execute = False
             exec_block  = "in_trade"
 
-        # 3. DB count guard: total open positions across all pairs
-        else:
+        # 3. In-memory total count guard (race-condition-safe — no DB lag)
+        if can_execute and len(self._active_trade_direction) >= MAX_OPEN_TRADES:
+            can_execute = False
+            exec_block  = "max_trades"
+
+        # 4. DB cross-check (backup — catches any in-memory desync)
+        if can_execute:
             open_trades = self.db.get_open_trades()
             if len(open_trades) >= MAX_OPEN_TRADES:
                 can_execute = False
                 exec_block  = "max_trades"
             elif any(t.pair == pair for t in open_trades):
-                # DB shows pair open even though in-memory doesn't — sync guard
                 can_execute = False
                 exec_block  = "in_trade"
 
-        # 4. Direct MT5 check before any execution (failsafe against DB lag)
+        # 5. Direct MT5 check before any execution (final failsafe against DB lag)
         if can_execute and isinstance(self.broker, MT5Broker):
             try:
                 import MetaTrader5 as mt5
@@ -772,7 +797,6 @@ class TradingEngine:
                 if live_pos:
                     can_execute = False
                     exec_block  = "mt5_position_exists"
-                    # Sync in-memory state with what MT5 actually has
                     self._active_trade_direction[pair] = (
                         "BUY" if live_pos[0].type == 0 else "SELL"
                     )
@@ -822,7 +846,7 @@ class TradingEngine:
             if not can_execute:
                 continue  # blocked: still score + draw, but no order
 
-            if not self.confluence.is_tradeable(score):
+            if not self.confluence.is_tradeable(score, pair=pair):
                 continue
 
             # ── Minimum R:R gate ─────────────────────────────────────────────
@@ -836,9 +860,9 @@ class TradingEngine:
                 logger.info(f"[Engine] {pair} RR={rr:.2f} < {MIN_RR_RATIO} — skip")
                 continue
 
-            # ── SL must be non-zero (hard rule) ──────────────────────────────
-            if signal.sl_price == 0 or signal.sl_price == signal.entry_price:
-                logger.warning(f"[Engine] {pair} no valid SL — trade rejected")
+            # ── SL must be present and valid (hard rule — no exceptions) ─────
+            if not signal.sl_price or signal.sl_price == 0 or signal.sl_price == signal.entry_price:
+                logger.warning(f"[Engine] {pair} missing/invalid SL — trade REJECTED")
                 continue
 
             # ── Correlation guard ─────────────────────────────────────────────
@@ -847,19 +871,29 @@ class TradingEngine:
                 logger.info(f"[Engine] {pair} correlation block: {corr_reason}")
                 continue
 
-            lot_size = FIXED_LOT_SIZE
-            risk_usd = round(lot_size * risk_dist * 10000 * 10, 2)
+            # ── Pair-specific lot size (volatile pairs get capped) ────────────
+            lot_size = VOLATILE_LOT_SIZES.get(pair, FIXED_LOT_SIZE)
+            # Rough risk in USD (pip value differs by pair, this is approximate)
+            if "JPY" in pair:
+                risk_usd = round(lot_size * risk_dist * 100 * 1000, 2)
+            elif pair in VOLATILE_PAIRS:
+                risk_usd = round(lot_size * risk_dist * 100, 2)   # gold/indices approx
+            else:
+                risk_usd = round(lot_size * risk_dist * 10000 * 10, 2)
 
-            # ── Pre-execution decision log (required for every trade) ─────────
+            # ── Pre-execution decision log — REQUIRED before every trade ─────
+            pair_type = "VOLATILE" if pair in VOLATILE_PAIRS else "standard"
+            min_score_used = VOLATILE_MIN_SCORE if pair in VOLATILE_PAIRS else self.confluence.min_score
             logger.info(
-                f"[Engine] SIGNAL CONFIRMED | {pair} {signal.direction} "
+                f"[Engine] ══ TRADE DECISION ══ "
+                f"{pair} ({pair_type}) {signal.direction} "
                 f"| Strategy: {signal.strategy_name} "
-                f"| Score: {score:.1f}/100 "
+                f"| Score: {score:.1f}/{min_score_used} "
                 f"| Regime: {regime} | Session: {session} "
                 f"| Entry: {signal.entry_price:.5f} "
                 f"| SL: {signal.sl_price:.5f} ({risk_dist*10000:.1f}p) "
                 f"| TP1: {signal.tp1_price:.5f} (RR={rr:.2f}) "
-                f"| Lot: {lot_size} Risk: ${risk_usd:.2f}"
+                f"| Lot: {lot_size} | Est.Risk: ${risk_usd:.2f}"
             )
 
             trade_id = self.execution.open_trade(

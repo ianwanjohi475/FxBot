@@ -16,6 +16,19 @@ PIP_SIZES = {
     "DEFAULT": 0.0001,
 }
 
+# Hard lot caps per pair — volatile instruments capped to limit exposure
+PAIR_MAX_LOT: dict = {
+    "XAU_USD":  0.03,   # gold — keep at 0.03 max (as per user spec)
+    "US30_USD": 0.02,   # Dow Jones index — slightly tighter (large point moves)
+    "GBP_JPY":  0.05,   # volatile cross — cap at 0.05
+}
+
+# Risk % override per pair — volatile pairs risk 0.5% instead of default 1%
+PAIR_RISK_PCT: dict = {
+    "XAU_USD":  0.005,
+    "US30_USD": 0.005,
+}
+
 LOT_STEPS = {
     "nano": 0.001,
     "micro": 0.01,
@@ -43,7 +56,9 @@ class PositionSizer:
             return 0.01
 
         pip_value_per_std_lot = self._pip_value_per_std_lot(pair, entry_price)
-        risk_amount = account_balance * self.risk_pct
+        # Use pair-specific risk % for volatile instruments
+        risk_pct = PAIR_RISK_PCT.get(pair, self.risk_pct)
+        risk_amount = account_balance * risk_pct
         lot_size = risk_amount / (pip_distance * pip_value_per_std_lot)
 
         account_type = self.get_account_size_type(account_balance)
@@ -51,11 +66,19 @@ class PositionSizer:
         lot_size = round(lot_size / lot_step) * lot_step
         lot_size = max(lot_step, lot_size)
 
+        # Apply hard per-pair lot cap
+        pair_max = PAIR_MAX_LOT.get(pair, None)
+        if pair_max is not None:
+            lot_size = min(lot_size, pair_max)
+
         # Cap: never exceed 2% margin of account (rough cap)
         max_lot = (account_balance * 0.02) / (entry_price * 100 * pip_value_per_std_lot + 0.0001)
         lot_size = min(lot_size, max_lot)
         lot_size = max(lot_step, round(lot_size, 3))
-        logger.debug(f"[PositionSizer] {pair} lot={lot_size} (risk={risk_amount:.2f} pips={pip_distance:.1f})")
+        logger.debug(
+            f"[PositionSizer] {pair} lot={lot_size} "
+            f"(risk_pct={risk_pct*100:.1f}% risk={risk_amount:.2f} pips={pip_distance:.1f})"
+        )
         return lot_size
 
     def _pip_size(self, pair: str) -> float:

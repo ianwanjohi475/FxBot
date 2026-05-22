@@ -29,9 +29,18 @@ SESSION_PREFERRED_PAIRS = {
     "overlap": ["EUR_USD", "GBP_USD", "USD_JPY", "XAU_USD"],
 }
 
+# Higher bar for volatile pairs — require stronger confluence before entry
+PAIR_MIN_SCORES: dict = {
+    "XAU_USD":  75,   # gold is highly volatile — need very strong confluence
+    "US30_USD": 75,   # Dow has large point moves — same strict requirement
+    "GBP_JPY":  70,   # high volatility cross — slightly above default
+    "USD_JPY":  65,
+    "EUR_USD":  60,
+}
+
 
 class ConfluenceEngine:
-    def __init__(self, min_score: float = 65.0):
+    def __init__(self, min_score: float = 60.0):
         self.min_score = min_score
         self.weights = {
             "trend_alignment": 20,
@@ -190,8 +199,9 @@ class ConfluenceEngine:
             return float(self.weights["news_clear"]) * 0.5
         return 0.0
 
-    def is_tradeable(self, score: float) -> bool:
-        return score >= self.min_score
+    def is_tradeable(self, score: float, pair: str = "") -> bool:
+        threshold = PAIR_MIN_SCORES.get(pair, self.min_score)
+        return score >= threshold
 
     def update_weights(self, weights: dict):
         for key, val in weights.items():

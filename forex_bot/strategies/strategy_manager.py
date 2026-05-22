@@ -97,9 +97,15 @@ class StrategyManager:
                         kwargs["current_time"] = current_time
                 signal = strategy.analyze(**kwargs)
                 if signal:
+                    # Guarantee strategy_name is always set — never blank
+                    if not signal.strategy_name:
+                        signal.strategy_name = name
                     signal.metadata["strategy_weight"] = self.weights.get(name, 1.0)
                     signals.append(signal)
-                    logger.debug(f"[StrategyManager] {name} generated {signal.direction} signal for {pair}")
+                    logger.debug(
+                        f"[StrategyManager] {pair} {signal.direction} "
+                        f"signal from '{signal.strategy_name}'"
+                    )
             except Exception as e:
                 logger.error(f"[StrategyManager] Error in strategy {name}: {e}", exc_info=True)
 
