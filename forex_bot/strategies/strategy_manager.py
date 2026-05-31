@@ -109,7 +109,25 @@ class StrategyManager:
             except Exception as e:
                 logger.error(f"[StrategyManager] Error in strategy {name}: {e}", exc_info=True)
 
-        return signals
+        # ── Directional consensus gate ───────────────────────────────────────
+        # Require ≥2 independent strategies to agree on direction before
+        # surfacing any signals.  Conflicting or lone signals are skipped.
+        buy_signals  = [s for s in signals if s.direction == "BUY"]
+        sell_signals = [s for s in signals if s.direction == "SELL"]
+
+        if len(buy_signals) >= 2 and len(buy_signals) > len(sell_signals):
+            logger.debug(f"[StrategyManager] {pair} consensus BUY ({len(buy_signals)} strategies)")
+            return buy_signals
+        if len(sell_signals) >= 2 and len(sell_signals) > len(buy_signals):
+            logger.debug(f"[StrategyManager] {pair} consensus SELL ({len(sell_signals)} strategies)")
+            return sell_signals
+
+        if signals:
+            logger.debug(
+                f"[StrategyManager] {pair} no consensus — "
+                f"BUY:{len(buy_signals)} SELL:{len(sell_signals)} — skipping"
+            )
+        return []
 
     def _get_atr(self, data: dict) -> float:
         from indicators.volatility import VolatilityIndicators

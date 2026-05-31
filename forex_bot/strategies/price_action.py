@@ -54,6 +54,18 @@ class PriceActionStrategy:
         atr_series = VolatilityIndicators.atr(df, 14)
         current_atr = atr_series.iloc[-1] if not pd.isna(atr_series.iloc[-1]) else atr
 
+        # ── Macro trend alignment gate ───────────────────────────────────────
+        # Only trade S/R bounces that align with the macro EMA trend.
+        # EMA50 > EMA200 = uptrend (only BUY at support); vice versa for SELL.
+        macro_trend = "NEUTRAL"
+        if len(df) >= 200:
+            ema50  = TrendIndicators.ema(df["close"], 50)
+            ema200 = TrendIndicators.ema(df["close"], 200)
+            if ema50.iloc[-1] > ema200.iloc[-1]:
+                macro_trend = "BUY"
+            elif ema50.iloc[-1] < ema200.iloc[-1]:
+                macro_trend = "SELL"
+
         # Candlestick pattern on last 3 candles
         patterns = CandlestickPatterns.detect_all(df.tail(10))
 
@@ -71,7 +83,7 @@ class PriceActionStrategy:
 
         # --- Bullish setup ---
         for sup in supports:
-            if abs(close - sup) <= tolerance and bullish_patterns:
+            if abs(close - sup) <= tolerance and bullish_patterns and macro_trend != "SELL":
                 sl = sup - current_atr * 1.5
                 tp1 = close + current_atr * 1.5
                 tp2 = close + current_atr * 3.0
@@ -95,7 +107,7 @@ class PriceActionStrategy:
 
         # --- Bearish setup ---
         for res in resistances:
-            if abs(close - res) <= tolerance and bearish_patterns:
+            if abs(close - res) <= tolerance and bearish_patterns and macro_trend != "BUY":
                 sl = res + current_atr * 1.5
                 tp1 = close - current_atr * 1.5
                 tp2 = close - current_atr * 3.0

@@ -58,8 +58,27 @@ class BreakoutStrategy:
         if range_size <= 0:
             return None
 
+        # ── Trend direction gate ─────────────────────────────────────────────
+        # Require DI alignment and EMA200 direction to avoid false breakouts.
+        # ADX >= 18 confirms momentum is building (not a dead range fake-out).
+        try:
+            adx_data = TrendIndicators.adx(df, 14)
+            adx_val  = adx_data["adx"].iloc[-1]
+            plus_di  = adx_data["plus_di"].iloc[-1]
+            minus_di = adx_data["minus_di"].iloc[-1]
+        except Exception:
+            return None
+        if adx_val < 18:
+            return None  # Too weak — likely false breakout from dead range
+
+        ema200 = TrendIndicators.ema(df["close"], 200) if len(df) >= 200 else None
+
         # Bullish breakout
         if current_close > upper and is_spike:
+            if plus_di <= minus_di:
+                return None  # DI momentum not confirming upside
+            if ema200 is not None and current_price < ema200.iloc[-1]:
+                return None  # Breaking up against macro downtrend — too risky
             sl = lower
             tp1 = current_price + range_size * 0.5
             tp2 = current_price + range_size * 1.0
@@ -78,12 +97,19 @@ class BreakoutStrategy:
                     "dc_upper": round(upper, 5),
                     "dc_lower": round(lower, 5),
                     "atr": round(current_atr, 5),
+                    "adx": round(adx_val, 2),
+                    "plus_di": round(plus_di, 2),
+                    "minus_di": round(minus_di, 2),
                 },
                 metadata={"breakout_type": "donchian_upper", "range_size": range_size},
             )
 
         # Bearish breakout
         if current_close < lower and is_spike:
+            if minus_di <= plus_di:
+                return None  # DI momentum not confirming downside
+            if ema200 is not None and current_price > ema200.iloc[-1]:
+                return None  # Breaking down against macro uptrend — too risky
             sl = upper
             tp1 = current_price - range_size * 0.5
             tp2 = current_price - range_size * 1.0
@@ -102,6 +128,9 @@ class BreakoutStrategy:
                     "dc_upper": round(upper, 5),
                     "dc_lower": round(lower, 5),
                     "atr": round(current_atr, 5),
+                    "adx": round(adx_val, 2),
+                    "plus_di": round(plus_di, 2),
+                    "minus_di": round(minus_di, 2),
                 },
                 metadata={"breakout_type": "donchian_lower", "range_size": range_size},
             )

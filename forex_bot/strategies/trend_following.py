@@ -51,6 +51,8 @@ class TrendFollowingStrategy:
 
         adx_data = TrendIndicators.adx(df, 14)
         adx = adx_data["adx"].iloc[-1]
+        plus_di  = adx_data["plus_di"].iloc[-1]
+        minus_di = adx_data["minus_di"].iloc[-1]
 
         macd_data = TrendIndicators.macd(close)
         macd_hist = macd_data["histogram"]
@@ -62,14 +64,18 @@ class TrendFollowingStrategy:
         cross = TrendIndicators.detect_ema_crossover(df, 9, 21)
         last_cross = cross.iloc[-1]
 
-        if adx < 20:
-            return None  # Not trending enough
+        # ── Trend strength gate ───────────────────────────────────────────────
+        # ADX must be ≥ 27 (professional threshold for a confirmed strong trend).
+        # ADX 20-26 = weak/developing trend — skip these entirely.
+        # Also require the directional index to agree with trade direction.
+        if adx < 27:
+            return None  # Not a strong enough trend — wait for confirmation
 
         above_200 = current_price > ema200.iloc[-1]
         below_200 = current_price < ema200.iloc[-1]
 
-        # Bullish: golden cross + above EMA200 + positive MACD
-        if last_cross == 1 and above_200 and macd_hist.iloc[-1] > 0:
+        # Bullish: golden cross + above EMA200 + positive MACD + DI+ leads DI-
+        if last_cross == 1 and above_200 and macd_hist.iloc[-1] > 0 and plus_di > minus_di:
             sl = ema50.iloc[-1] - current_atr * 0.5
             tp1 = current_price + current_atr * 1.5
             tp2 = current_price + current_atr * 3.0
@@ -89,13 +95,15 @@ class TrendFollowingStrategy:
                     "ema21": round(ema21.iloc[-1], 5),
                     "ema200": round(ema200.iloc[-1], 5),
                     "adx": round(adx, 2),
+                    "plus_di": round(plus_di, 2),
+                    "minus_di": round(minus_di, 2),
                     "macd_hist": round(macd_hist.iloc[-1], 6),
                 },
                 metadata={"cross": "golden", "adx": adx},
             )
 
-        # Bearish: death cross + below EMA200 + negative MACD
-        if last_cross == -1 and below_200 and macd_hist.iloc[-1] < 0:
+        # Bearish: death cross + below EMA200 + negative MACD + DI- leads DI+
+        if last_cross == -1 and below_200 and macd_hist.iloc[-1] < 0 and minus_di > plus_di:
             sl = ema50.iloc[-1] + current_atr * 0.5
             tp1 = current_price - current_atr * 1.5
             tp2 = current_price - current_atr * 3.0
@@ -115,6 +123,8 @@ class TrendFollowingStrategy:
                     "ema21": round(ema21.iloc[-1], 5),
                     "ema200": round(ema200.iloc[-1], 5),
                     "adx": round(adx, 2),
+                    "plus_di": round(plus_di, 2),
+                    "minus_di": round(minus_di, 2),
                     "macd_hist": round(macd_hist.iloc[-1], 6),
                 },
                 metadata={"cross": "death", "adx": adx},

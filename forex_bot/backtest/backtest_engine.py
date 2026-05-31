@@ -91,7 +91,7 @@ class BacktestEngine:
         risk_pct: float = 0.01,
         spread_pips: dict = None,
         slippage_pips: float = SLIPPAGE_PIPS,
-        min_score: float = 65,
+        min_score: float = 60,
     ):
         self.initial_balance = initial_balance
         self.balance = initial_balance
@@ -101,6 +101,7 @@ class BacktestEngine:
         self.min_score = min_score
         self.strategy_manager = StrategyManager()
         self.confluence = ConfluenceEngine(min_score)
+        self._pair_cache: str = ""
         self.sizer = PositionSizer(risk_pct)
         self.trailing = TrailingStop()
 
@@ -148,7 +149,7 @@ class BacktestEngine:
 
             for signal in signals:
                 score = self.confluence.score_signal(signal, window, context)
-                if score < self.min_score:
+                if not self.confluence.is_tradeable(score, pair=pair):
                     continue
 
                 # Simulate entry with slippage + spread

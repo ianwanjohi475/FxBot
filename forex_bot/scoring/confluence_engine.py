@@ -2,11 +2,12 @@
 Confluence scoring engine — scores every signal 0–100.
 
 Scoring components:
-  Trend alignment (3 timeframes)  → max 20
-  Strong S/R level                → max 15
-  Pattern confirmed               → max 15
+  Trend strength (ADX-based)      → max 15
+  Trend alignment (3 timeframes)  → max 15
+  Strong S/R level                → max 12
+  Pattern confirmed               → max 11
   Momentum (RSI + MACD)          → max 15
-  SMC structure (OB or FVG)      → max 15
+  SMC structure (OB or FVG)      → max 12
   Volume confirmation             → max 10
   Session timing                  → max  5
   News risk clear                 → max  5
@@ -43,11 +44,12 @@ class ConfluenceEngine:
     def __init__(self, min_score: float = 60.0):
         self.min_score = min_score
         self.weights = {
-            "trend_alignment": 20,
-            "sr_level": 15,
-            "pattern": 15,
+            "trend_strength": 15,   # ADX strength — primary gate for trend quality
+            "trend_alignment": 15,
+            "sr_level": 12,
+            "pattern": 11,
             "momentum": 15,
-            "smc_structure": 15,
+            "smc_structure": 12,
             "volume": 10,
             "session": 5,
             "news_clear": 5,
@@ -56,6 +58,9 @@ class ConfluenceEngine:
     def score_signal(self, signal: TradeSignal, data: dict, context: dict) -> float:
         score = 0.0
         breakdown = {}
+
+        s = self._score_trend_strength(signal, data)
+        score += s; breakdown["trend_strength"] = s
 
         s = self._score_trend_alignment(signal, data)
         score += s; breakdown["trend_alignment"] = s
@@ -87,6 +92,39 @@ class ConfluenceEngine:
         signal.metadata["score_breakdown"] = breakdown
         logger.debug(f"[Confluence] {signal.pair} {signal.strategy_name} score={score} {breakdown}")
         return score
+
+    def _score_trend_strength(self, signal: TradeSignal, data: dict) -> float:
+        """Score 0–15 based on ADX strength and DI directional alignment."""
+        for tf in [signal.timeframe, "H1", "H4"]:
+            df = data.get(tf)
+            if df is None or len(df) < 20:
+                continue
+            try:
+                adx_data = TrendIndicators.adx(df, 14)
+                adx_val  = adx_data["adx"].iloc[-1]
+                plus_di  = adx_data["plus_di"].iloc[-1]
+                minus_di = adx_data["minus_di"].iloc[-1]
+
+                # Score by ADX strength tier
+                if adx_val < 18:
+                    return 0.0   # Ranging — no trend value
+                elif adx_val < 23:
+                    base = self.weights["trend_strength"] * 0.33   # weak developing
+                elif adx_val < 28:
+                    base = self.weights["trend_strength"] * 0.67   # moderate
+                else:
+                    base = float(self.weights["trend_strength"])    # strong confirmed
+
+                # DI alignment bonus/penalty
+                if signal.direction == "BUY" and plus_di > minus_di:
+                    return round(base, 2)
+                elif signal.direction == "SELL" and minus_di > plus_di:
+                    return round(base, 2)
+                else:
+                    return 0.0  # DI opposes signal direction
+            except Exception:
+                continue
+        return 0.0
 
     def _score_trend_alignment(self, signal: TradeSignal, data: dict) -> float:
         """Check EMA50 direction on D1, H4, H1."""

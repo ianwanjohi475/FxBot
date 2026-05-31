@@ -7,6 +7,7 @@ from typing import Optional
 from . import TradeSignal
 from patterns.smc import SmartMoneyConcepts
 from indicators.volatility import VolatilityIndicators
+from indicators.trend import TrendIndicators
 from utils.logger import get_logger
 from datetime import datetime
 import pytz
@@ -73,6 +74,23 @@ class SMCStrategy:
         if direction is None:
             return None
 
+        # ── Trend strength gate ──────────────────────────────────────────────
+        # SMC setups need at least a developing trend (ADX >= 20).
+        # DI alignment must match the structural bias.
+        try:
+            adx_data = TrendIndicators.adx(df, 14)
+            adx_val  = adx_data["adx"].iloc[-1]
+            plus_di  = adx_data["plus_di"].iloc[-1]
+            minus_di = adx_data["minus_di"].iloc[-1]
+        except Exception:
+            return None
+        if adx_val < 20:
+            return None  # Ranging market — SMC structure not reliable
+        if direction == "BUY" and plus_di <= minus_di:
+            return None  # DI not confirming bullish bias
+        if direction == "SELL" and minus_di <= plus_di:
+            return None  # DI not confirming bearish bias
+
         # Check for OB in direction
         obs = smc.get("order_blocks", [])
         fvgs = smc.get("fvg", [])
@@ -133,7 +151,8 @@ class SMCStrategy:
             tp2_price=round(tp2, 5),
             tp3_price=round(tp3, 5),
             smc_concept=smc_concept,
-            indicators={"atr": round(current_atr, 5)},
+            indicators={"atr": round(current_atr, 5), "adx": round(adx_val, 2),
+                        "plus_di": round(plus_di, 2), "minus_di": round(minus_di, 2)},
             metadata={
                 "concept": concept_name,
                 "kill_zone": kill_zone.get("zone_name"),
