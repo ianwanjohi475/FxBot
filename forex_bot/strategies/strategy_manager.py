@@ -112,15 +112,30 @@ class StrategyManager:
         # ── Directional consensus gate ───────────────────────────────────────
         # Require ≥2 independent strategies to agree on direction before
         # surfacing any signals.  Conflicting or lone signals are skipped.
+        # Each surviving signal is tagged with how many strategies agreed and
+        # their names, so the engine + dashboard can show the "combination".
         buy_signals  = [s for s in signals if s.direction == "BUY"]
         sell_signals = [s for s in signals if s.direction == "SELL"]
 
+        def _tag(group):
+            names = [s.strategy_name for s in group]
+            for s in group:
+                s.metadata["consensus_count"] = len(group)
+                s.metadata["consensus_strategies"] = names
+            return group
+
         if len(buy_signals) >= 2 and len(buy_signals) > len(sell_signals):
-            logger.debug(f"[StrategyManager] {pair} consensus BUY ({len(buy_signals)} strategies)")
-            return buy_signals
+            logger.info(
+                f"[StrategyManager] {pair} CONSENSUS BUY — {len(buy_signals)} strategies agree: "
+                f"{[s.strategy_name for s in buy_signals]}"
+            )
+            return _tag(buy_signals)
         if len(sell_signals) >= 2 and len(sell_signals) > len(buy_signals):
-            logger.debug(f"[StrategyManager] {pair} consensus SELL ({len(sell_signals)} strategies)")
-            return sell_signals
+            logger.info(
+                f"[StrategyManager] {pair} CONSENSUS SELL — {len(sell_signals)} strategies agree: "
+                f"{[s.strategy_name for s in sell_signals]}"
+            )
+            return _tag(sell_signals)
 
         if signals:
             logger.debug(

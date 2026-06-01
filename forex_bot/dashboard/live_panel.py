@@ -28,9 +28,10 @@ TREND_CLR = "#5c6bc0"
 RANGE_CLR = "#ab47bc"
 VOLT_CLR  = "#ff7043"
 
-W, H      = 760, 295
+W, H      = 880, 295
 ROW_H     = 32
 BAR_CHARS = 12
+STATUS_CLR = "#80cbc4"   # teal for status text
 
 
 def score_color(s: int) -> str:
@@ -134,7 +135,8 @@ class LivePanel:
             ("SCORE BAR",          14, "w"),
             ("DIR",      6,  "w"),
             ("REGIME",   8,  "w"),
-            ("STRATEGY", 22, "w"),
+            ("STRATEGY", 20, "w"),
+            ("STATUS",   16, "w"),
             ("TIME",     6,  "e"),
         ]
         for txt, w, anc in headers:
@@ -159,16 +161,17 @@ class LivePanel:
             lbl_bar   = tk.Label(fr, bg=row_bg, fg=GRN,    font=self._mono,  width=14, anchor="w")
             lbl_dir   = tk.Label(fr, bg=row_bg, fg=BUY_CLR,font=self._bold,  width=6,  anchor="w")
             lbl_reg   = tk.Label(fr, bg=row_bg, fg=TREND_CLR,font=self._small,width=8, anchor="w")
-            lbl_strat = tk.Label(fr, bg=row_bg, fg=FG_DIM, font=self._small, width=22, anchor="w")
+            lbl_strat = tk.Label(fr, bg=row_bg, fg=FG,     font=self._small, width=20, anchor="w")
+            lbl_stat  = tk.Label(fr, bg=row_bg, fg=STATUS_CLR, font=self._small, width=16, anchor="w")
             lbl_time  = tk.Label(fr, bg=row_bg, fg=FG_DIM, font=self._small, width=6,  anchor="e")
 
-            for lbl in (lbl_pair, lbl_score, lbl_bar, lbl_dir, lbl_reg, lbl_strat, lbl_time):
+            for lbl in (lbl_pair, lbl_score, lbl_bar, lbl_dir, lbl_reg, lbl_strat, lbl_stat, lbl_time):
                 lbl.pack(side="left", padx=(6, 0), pady=4)
 
             self._rows.append({
                 "frame": fr, "pair": lbl_pair, "score": lbl_score,
                 "bar": lbl_bar, "dir": lbl_dir, "reg": lbl_reg,
-                "strat": lbl_strat, "time": lbl_time, "bg": row_bg,
+                "strat": lbl_strat, "stat": lbl_stat, "time": lbl_time, "bg": row_bg,
             })
 
         # Separator
@@ -216,7 +219,8 @@ class LivePanel:
             except (ValueError, TypeError):
                 sc = 0
             dirn    = row.get("direction", "--")
-            strat   = row.get("strategy", "scanning")[:20]
+            strat   = row.get("strategy", "scanning")[:19]
+            status  = row.get("status", "")[:15]
             regime  = row.get("regime", "?")
             session = row.get("session", session)
             upd     = row.get("updated", "--")
@@ -232,6 +236,15 @@ class LivePanel:
             r["dir"].config(text=dir_txt, fg=dir_clr)
             r["reg"].config(text=regime_badge(regime), fg=regime_color(regime))
             r["strat"].config(text=strat)
+            # Colour the status: green when READY/IN TRADE, dim otherwise
+            st_lo = status.lower()
+            if "ready" in st_lo or "in trade" in st_lo:
+                st_clr = GRN
+            elif "overext" in st_lo or "block" in st_lo or "news" in st_lo:
+                st_clr = ORG
+            else:
+                st_clr = FG_DIM
+            r["stat"].config(text=status, fg=st_clr)
             r["time"].config(text=upd)
 
             if sc > best_score and dirn not in ("--", "NONE"):
@@ -250,7 +263,7 @@ class LivePanel:
 
         # Hide unused rows
         for i in range(len(data), 6):
-            for lbl_key in ("pair", "score", "bar", "dir", "reg", "strat", "time"):
+            for lbl_key in ("pair", "score", "bar", "dir", "reg", "strat", "stat", "time"):
                 self._rows[i][lbl_key].config(text="")
 
         # Update header session

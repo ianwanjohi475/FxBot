@@ -13,6 +13,7 @@ import signal
 import threading
 from datetime import datetime
 import pytz
+import pandas as pd
 from typing import Optional, Set
 
 import os
@@ -58,6 +59,10 @@ FIXED_LOT_SIZE           = 0.03  # default lot size (volatile pairs may override
 MIN_RR_RATIO             = 1.5   # skip signal if TP1 < 1.5× SL distance
 TRADE_COOLDOWN_SECS      = 3600  # minimum seconds between trades on the same pair
 SYNC_GRACE_SECS          = 90    # seconds after opening before sync can close a trade
+
+# ── "Sure bet" professional confirmation rules ────────────────────────────────
+MIN_CONSENSUS_STRATEGIES = 2     # require ≥2 strategies to agree before firing
+MAX_ENTRY_EXTENSION_ATR  = 2.0   # reject entries > 2×ATR from the fast EMA (anti-chase)
 
 # ── Volatile pair rules ───────────────────────────────────────────────────────
 VOLATILE_PAIRS           = {"XAU_USD", "US30_USD"}
@@ -652,7 +657,7 @@ class TradingEngine:
         if df is None or df.empty:
             df = data.get("M15")
         if df is None or len(df) < 30:
-            return "trending"
+            return "ranging"   # unknown → treat as ranging (down-weights aggressive trend entries)
         try:
             adx_val = TrendIndicators.adx(df, 14)["adx"].iloc[-1]
             atr_s   = VolatilityIndicators.atr(df, 14)
@@ -664,7 +669,36 @@ class TradingEngine:
                 return "trending"
             return "ranging"
         except Exception:
-            return "trending"
+            return "ranging"   # safe default — don't bias toward firing
+
+    def _is_overextended(self, signal, data: dict) -> bool:
+        """True if the entry is chasing — too far from value (fast EMA).
+
+        A professional waits for price to be near value before entering with the
+        trend. If price is already > MAX_ENTRY_EXTENSION_ATR ATRs beyond EMA21 in
+        the trade direction, the move is extended and we skip (don't chase tops/bottoms).
+        """
+        from indicators.trend import TrendIndicators
+        from indicators.volatility import VolatilityIndicators
+        df = data.get(signal.timeframe)
+        if df is None or df.empty:
+            df = data.get("H1") or data.get("M15")
+        if df is None or len(df) < 30:
+            return False  # not enough data — don't block
+        try:
+            ema21 = TrendIndicators.ema(df["close"], 21).iloc[-1]
+            atr_s = VolatilityIndicators.atr(df, 14)
+            atr_now = atr_s.iloc[-1]
+            if pd.isna(atr_now) or atr_now <= 0:
+                return False
+            extension = (signal.entry_price - ema21) / atr_now
+            if signal.direction == "BUY" and extension > MAX_ENTRY_EXTENSION_ATR:
+                return True   # bought too far above value — chasing
+            if signal.direction == "SELL" and -extension > MAX_ENTRY_EXTENSION_ATR:
+                return True   # sold too far below value — chasing
+        except Exception:
+            return False
+        return False
 
     def _tune_weights_for_regime(self, regime: str, pair: str) -> None:
         """Boost strategies best suited for the detected market regime."""
@@ -832,21 +866,52 @@ class TradingEngine:
             "account_balance": balance,
         }
 
+        # Contributing strategies (post-consensus, all share the same direction).
+        consensus_count = signals[0].metadata.get("consensus_count", len(signals)) if signals else 0
+        consensus_names = signals[0].metadata.get("consensus_strategies", []) if signals else []
+        # Compact label for the dashboard, e.g. "trend+momentum+smc"
+        consensus_label = "+".join(n.replace("_strategy", "").replace("_following", "")
+                                   for n in consensus_names[:3]) or "scanning"
+
         best_score = 0.0
         best_dir   = "NONE"
-        best_strat = "scanning"
+        best_strat = consensus_label
         for signal in signals:
             score = self.confluence.score_signal(signal, data, context)
+
+            # ── Consensus confidence boost ───────────────────────────────────
+            # The more independent strategies that agree, the higher the
+            # confidence. +4 pts per extra agreeing strategy (capped at 100).
+            if consensus_count > MIN_CONSENSUS_STRATEGIES:
+                score = min(100.0, score + 4.0 * (consensus_count - MIN_CONSENSUS_STRATEGIES))
+            signal.confluence_score = score
+            signal.confidence_pct   = score
+
             if score > best_score:
                 best_score = score
                 best_dir   = signal.direction
-                best_strat = signal.strategy_name
             self._write_chart_signal(signal, score)   # always draw — even if not traded
 
             if not can_execute:
                 continue  # blocked: still score + draw, but no order
 
+            # ── Hard consensus gate (sure bet) ───────────────────────────────
+            if consensus_count < MIN_CONSENSUS_STRATEGIES:
+                logger.debug(f"[Engine] {pair} only {consensus_count} strategy — no consensus, skip")
+                continue
+
             if not self.confluence.is_tradeable(score, pair=pair):
+                continue
+
+            # ── Anti-chase: reject overextended entries ──────────────────────
+            # A professional doesn't buy a move that's already run away from
+            # value. Reject if price is > MAX_ENTRY_EXTENSION_ATR from EMA21.
+            if self._is_overextended(signal, data):
+                logger.info(
+                    f"[Engine] {pair} {signal.direction} entry overextended "
+                    f"from value — skip (anti-chase)"
+                )
+                exec_block = "overextended"
                 continue
 
             # ── Minimum R:R gate ─────────────────────────────────────────────
@@ -887,7 +952,8 @@ class TradingEngine:
             logger.info(
                 f"[Engine] ══ TRADE DECISION ══ "
                 f"{pair} ({pair_type}) {signal.direction} "
-                f"| Strategy: {signal.strategy_name} "
+                f"| Trigger: {signal.strategy_name} "
+                f"| Consensus: {consensus_count} agree ({consensus_label}) "
                 f"| Score: {score:.1f}/{min_score_used} "
                 f"| Regime: {regime} | Session: {session} "
                 f"| Entry: {signal.entry_price:.5f} "
@@ -920,12 +986,25 @@ class TradingEngine:
                 )
                 break   # ONE trade per pair per analysis cycle — hard stop
 
-        # Always update live score dashboard
+        # Always update live score dashboard.
+        # strategy = which strategies aligned; status = why it did / didn't fire.
+        if pair in self._active_trade_direction:
+            status = "IN TRADE"
+        elif exec_block:
+            status = exec_block
+        elif best_dir != "NONE" and self.confluence.is_tradeable(best_score, pair=pair):
+            status = f"READY ({consensus_count} agree)"
+        elif best_dir != "NONE":
+            status = "building"
+        else:
+            status = "scanning"
+
         self._base_scores[pair] = best_score   # live thread adjusts from this base
         self._pair_scores[pair] = {
             "score":     best_score,
             "direction": best_dir,
-            "strategy":  exec_block if exec_block else best_strat,
+            "strategy":  best_strat,
+            "status":    status,
             "regime":    self._current_regime.get(pair, "?"),
             "updated":   datetime.now(tz=pytz.utc).strftime("%H:%M"),
         }
@@ -1245,13 +1324,15 @@ class TradingEngine:
         session = SessionDetector.get_session_info(datetime.now(tz=pytz.utc))["primary_session"]
 
         def _build_csv() -> str:
-            lines = ["pair,score,direction,strategy,regime,session,updated"]
+            # status appended LAST to keep column positions stable for any
+            # position-based parser (e.g. MQL5 indicator) reading older columns.
+            lines = ["pair,score,direction,strategy,regime,session,updated,status"]
             for pair in PAIRS:
                 d = self._pair_scores.get(pair, {})
                 lines.append(
                     f"{pair},{d.get('score',0):.0f},{d.get('direction','--')},"
                     f"{d.get('strategy','scanning')},{d.get('regime','?')},"
-                    f"{session},{d.get('updated','--')}"
+                    f"{session},{d.get('updated','--')},{d.get('status','scanning')}"
                 )
             return "\n".join(lines) + "\n"
 
