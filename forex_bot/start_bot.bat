@@ -22,7 +22,7 @@ if errorlevel 1 (
 
 :: Pull latest code
 echo [2/3] Pulling latest code from GitHub...
-git pull origin claude/forex-trading-bot-GZN5q
+git pull origin forex-trading-bot-GZN5q
 echo.
 
 :: Start the bot
